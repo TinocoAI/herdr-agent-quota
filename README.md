@@ -13,14 +13,20 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 
 ```text
 ● Owner · Claude
-  5h 100% · week 31%     ← percent remaining, not token counts
+  5h    100%  reset 3h07m
+  week   31%  reset 2d3h
   hi                     ← what that pane is actually working on
 ```
 
 ![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
-- **Four CLIs, one row each** — Claude Code, Codex, Grok, Agy/Antigravity.
-- **Three lines per pane** — provider, remaining usage, current topic.
+*A real Herdr workspace: Claude shows separate five-hour and weekly reset
+ETAs, Codex and Grok show their weekly windows, and the final line of each
+agent card is the latest user prompt rather than an AI-generated status.*
+
+- **Four CLIs, one sidebar** — Claude Code, Codex, Grok, Agy/Antigravity.
+- **Three or four lines per pane** — provider, one line per quota window, and
+  the latest user prompt.
 - **Local only** — no usage data uploaded, no browser cookies, no keychain
   scraping, and credentials are never written or refreshed.
 - **Never lies to you** — a failed refresh keeps the last good number instead
@@ -53,7 +59,7 @@ herdr server reload-config
 
 That is the complete Herdr setup. `herdr plugin link .` builds the Rust binary
 and registers the startup/event hooks. `configure --apply` makes an idempotent
-three-row sidebar edit and installs a reversible Claude Code `statusLine`
+per-window sidebar edit and installs a reversible Claude Code `statusLine`
 wrapper. You can run the same setup from Herdr's action menu with **Configure
 agent quota sidebar**. Use **Refresh agent quota** for a one-shot refresh.
 
@@ -72,7 +78,7 @@ the previous Claude statusLine.
 
 | CLI | Sidebar windows | Local collection path | Extra setup |
 | --- | --- | --- | --- |
-| Claude Code `2.1.232` | `5h` + `week` | Official `statusLine` JSON: `rate_limits.five_hour` and `seven_day` | `configure --apply` chains an existing `statusLine` command |
+| Claude Code `2.1.233` | `5h` + `week` | Official `statusLine` JSON: `rate_limits.five_hour` and `seven_day` | `configure --apply` chains an existing `statusLine` command |
 | OpenAI Codex `0.147.0` | `week` | One-shot local `codex app-server --stdio`, `account/rateLimits/read` | ChatGPT subscription login; API-key mode is shown as unavailable |
 | Grok CLI / Grok Build `1.0.3` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Log in to Grok CLI; no xAI team/API billing is queried |
 | Agy / Antigravity CLI `1.1.13` | `5h` + `week` | Official `statusLine` JSON `quota` object (`gemini-*` and `3p-*` pools) | Set the native `/statusline` command once (below) |
@@ -81,11 +87,16 @@ Versions above were checked on the development machine on 2026-08-15. The
 parser follows the provider fields rather than hard-coding these version
 strings, so newer compatible CLI releases can continue to work.
 
-The sidebar shows **percentage remaining**, not token counts or reset times.
-Codex and Grok expose their weekly window. Claude Code and Agy expose both
-five-hour and weekly windows. A failed refresh never replaces a successful
-cached value with `unavailable`; a provider without any successful snapshot is
-shown as `N/A` until its first usable event.
+The sidebar shows **percentage remaining** and the time until each reset, not
+token counts. Codex and Grok expose their weekly window. Claude Code and Agy
+expose both five-hour and weekly windows. Reset ETAs use minutes below one hour,
+hours and minutes below one day, and days plus hours above one day. They are
+recalculated on agent events or manual refresh; the sidebar does not run a
+resident minute-by-minute countdown.
+
+A failed refresh never replaces a successful cached value with `unavailable`;
+a provider without any successful snapshot is shown as `N/A` until its first
+usable event.
 
 ## Agy / Antigravity setup
 
@@ -107,17 +118,23 @@ once:
 
 ```toml
 [ui.sidebar.agents]
+row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", "$quota_provider"],
-  ["$quota_summary"],
+  ["$quota_5h"],
+  ["$quota_week"],
   ["$quota_topic"],
 ]
 ```
 
 - `state_icon` and `tab` are Herdr's built-in status and plane labels.
 - `$quota_provider` is `Claude`, `Codex`, `Grok`, or `Agy`.
-- `$quota_summary` is the compact `5h ... · week ...` or `week ...` line.
-- `$quota_topic` is the latest prompt/topic found in the pane output.
+- `$quota_5h` and `$quota_week` put each available quota window on its own row;
+  Herdr hides the absent 5h row for Codex and Grok.
+- `row_gap = 1` adds one blank row between agent cards. An existing explicit
+  `row_gap` value is preserved.
+- `$quota_summary` remains available for custom compact layouts.
+- `$quota_topic` is the latest user prompt found in the pane output.
 
 Herdr plugin v1 accepts text tokens, not provider image components. For that
 reason the default layout uses the readable provider name and keeps Herdr's
@@ -126,9 +143,9 @@ checked-in [`docs/icons/`](docs/icons/) assets are optional visual references;
 they are not injected into the native sidebar.
 
 The topic reader is event-driven: it scans recent pane output after an agent
-event, prefers the latest user prompt, and falls back to the native terminal
-title when the CLI has not printed a prompt yet. It does not show the working
-directory.
+event and extracts the latest user prompt. It deliberately leaves the topic
+empty when no prompt is found instead of showing an AI-generated terminal title
+such as `Thinking` or `Executing`. It does not show the working directory.
 
 ## Data sources and privacy
 

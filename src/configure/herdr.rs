@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 9] = [
+const QUOTA_ROW_MARKERS: [&str; 10] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
@@ -13,7 +13,9 @@ const QUOTA_ROW_MARKERS: [&str; 9] = [
     "$quota_topic",
     "$quota_5h",
     "$quota_week",
+    "$quota_header",
 ];
+const ROW_GAP_MARKER: &str = "herdr-agent-quota";
 
 pub fn check() -> Result<()> {
     let path = config_path()?;
@@ -97,6 +99,13 @@ pub fn add_quota_row(input: &str) -> Result<String> {
             .context("parse Herdr TOML config")?
     };
     let agents = ensure_table(&mut document, &["ui", "sidebar", "agents"])?;
+    if !agents.contains_key("row_gap") {
+        let mut row_gap = Value::from(1);
+        row_gap
+            .decor_mut()
+            .set_suffix(format!(" # {ROW_GAP_MARKER}"));
+        agents.insert("row_gap", Item::Value(row_gap));
+    }
     let rows = agents["rows"].or_insert(Item::Value(Value::Array(Array::new())));
     let rows = rows
         .as_array_mut()
@@ -155,6 +164,15 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
         }
     }
     agents["rows"] = Item::Value(Value::Array(retained));
+    let managed_row_gap = agents
+        .get("row_gap")
+        .and_then(Item::as_value)
+        .and_then(|value| value.decor().suffix())
+        .and_then(|suffix| suffix.as_str())
+        .is_some_and(|suffix| suffix.contains(ROW_GAP_MARKER));
+    if managed_row_gap {
+        agents.remove("row_gap");
+    }
     Ok(document.to_string())
 }
 
@@ -228,15 +246,13 @@ fn normalize_official_row(row: Array) -> Array {
 }
 
 fn append_quota_rows(rows: &mut Array) {
-    // Keep the official state row on its existing row when possible. This
-    // makes the layout three compact lines: plane/provider, usage, and topic.
-    let mut usage_row_found = false;
-    let mut combined_state_agent = false;
+    // Keep the official state row, but split each quota window onto its own
+    // row. Herdr elides rows whose custom token is absent, so weekly-only
+    // providers do not gain a blank five-hour row.
     for row in rows.iter_mut() {
         let Some(items) = row.as_array_mut() else {
             continue;
         };
-        let has_agent = items.iter().any(|item| item.as_str() == Some("agent"));
         let has_state_icon = items.iter().any(|item| item.as_str() == Some("state_icon"));
         let mut cleaned = Array::new();
         for item in items.iter() {
@@ -245,14 +261,6 @@ fn append_quota_rows(rows: &mut Array) {
                 Some("agent") if !has_state_icon => {}
                 _ => cleaned.push(item.clone()),
             }
-        }
-        if has_agent && has_state_icon {
-            combined_state_agent = true;
-            cleaned.push("$quota_summary");
-            usage_row_found = true;
-        } else if has_agent {
-            cleaned.push("$quota_summary");
-            usage_row_found = true;
         }
         *items = cleaned;
     }
@@ -283,11 +291,13 @@ fn append_quota_rows(rows: &mut Array) {
         }
     }
 
-    if !usage_row_found && !combined_state_agent {
-        let mut usage_row = Array::new();
-        usage_row.push("$quota_summary");
-        rows.push(Value::Array(usage_row));
-    }
+    let mut five_hour_row = Array::new();
+    five_hour_row.push("$quota_5h");
+    rows.push(Value::Array(five_hour_row));
+
+    let mut weekly_row = Array::new();
+    weekly_row.push("$quota_week");
+    rows.push(Value::Array(weekly_row));
 
     let mut topic_row = Array::new();
     topic_row.push("$quota_topic");
@@ -296,7 +306,7 @@ fn append_quota_rows(rows: &mut Array) {
 
 fn print_diff_hint() {
     println!("  keep Herdr's official state icon and plane tab");
-    println!("  add provider, one usage row, and a separate live terminal topic row");
+    println!("  add provider, separate 5h/week rows, and a live user-prompt row");
 }
 
 #[cfg(test)]
@@ -309,10 +319,11 @@ mod tests {
 rows = [["state_icon", "agent"]]
 "#;
         let updated = add_quota_row(original).unwrap();
-        assert!(updated.contains("$quota_summary"));
+        assert!(updated.contains("$quota_5h"));
+        assert!(updated.contains("$quota_week"));
         assert!(updated.contains("state_icon"));
         assert!(updated.contains("agent"));
-        assert_eq!(updated.matches("[\"").count(), 2);
+        assert_eq!(updated.matches("[\"").count(), 4);
         assert_eq!(add_quota_row(&updated).unwrap(), updated);
     }
 
@@ -337,7 +348,8 @@ rows = [["$quota_provider", "$quota_status"], ["$quota_summary"]]
         let updated = add_quota_row(original).unwrap();
         assert!(updated.contains("state_icon"));
         assert!(updated.contains("$quota_provider"));
-        assert!(updated.contains("$quota_summary"));
+        assert!(updated.contains("$quota_5h"));
+        assert!(updated.contains("$quota_week"));
         assert_eq!(add_quota_row(&updated).unwrap(), updated);
     }
 }

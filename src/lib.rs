@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod cli;
 pub mod model;
+pub mod presentation;
 
 pub mod configure;
 pub mod dashboard;

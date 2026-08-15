@@ -1,5 +1,4 @@
 use crate::cache::CacheStore;
-use crate::model::Provider;
 use crate::providers::claude::run_statusline;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -115,26 +114,10 @@ pub fn run_statusline_hook() -> Result<()> {
             let _ = cache.save(snapshot);
         }
     }
-    // Claude renders this hook's stdout as the status line. With nothing to
-    // chain, staying silent would blank a status line the user did have, so
-    // fall back to the same one-line summary the Agy hook prints.
-    //
-    // This must print exactly one line on every tick, including the ticks
-    // whose payload carries no `rate_limits`. Printing only sometimes would
-    // make the status line oscillate between one line and none, which shifts
-    // the whole pane up and down on every refresh.
+    // This hook exists to collect quota for Herdr. If the user did not have a
+    // statusLine before installation, keep stdout empty so Claude has no
+    // plugin-owned line to repaint after every interaction.
     let Some(command) = previous_statusline_command()? else {
-        let cached = match snapshot {
-            Some(snapshot) => Some(snapshot),
-            None => CacheStore::from_env()
-                .and_then(|cache| cache.load(Provider::Claude))
-                .ok()
-                .flatten(),
-        };
-        match cached {
-            Some(snapshot) => println!("Claude | {}", snapshot.summary()),
-            None => println!("Claude | quota N/A"),
-        }
         return Ok(());
     };
     let mut child = Command::new("sh")

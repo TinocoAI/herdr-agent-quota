@@ -1,20 +1,20 @@
 use herdr_agent_quota::dashboard::render_provider;
-use herdr_agent_quota::model::{Provider, ProviderSnapshot, UsageWindow, WindowKind};
+use herdr_agent_quota::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
 
 #[test]
-fn agent_row_is_compact_and_does_not_render_times() {
+fn agent_row_renders_compact_reset_eta_without_absolute_timestamp() {
     let snapshot = ProviderSnapshot::new(
         Provider::Grok,
         vec![UsageWindow::new(
             WindowKind::Weekly,
             79.0,
-            Some("2026-08-22T00:00:00Z".to_string()),
+            Some(ResetAt::from_unix_seconds(183_600)),
         )
         .unwrap()],
         1,
     );
     assert_eq!(
-        render_provider(Provider::Grok, Some(&snapshot)),
-        "Grok WARN\r\n  week 21% left"
+        render_provider(Provider::Grok, Some(&snapshot), 0),
+        "Grok WARN\r\n  week 21% left │ reset 2d3h"
     );
 }

@@ -1,5 +1,6 @@
 use crate::cache::CacheStore;
 use crate::model::{Provider, ProviderSnapshot};
+use crate::presentation::dashboard_summary;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -49,21 +50,26 @@ fn print_snapshot(cache: &CacheStore) -> Result<()> {
 
 fn render_snapshot(cache: &CacheStore) -> Result<String> {
     let mut output = String::from("Herdr Agent Quota\r\n=================\r\n");
+    let now = CacheStore::now_unix();
     for provider in Provider::ALL {
         let snapshot = cache.load(provider)?;
-        output.push_str(&render_provider(provider, snapshot.as_ref()));
+        output.push_str(&render_provider(provider, snapshot.as_ref(), now));
         output.push_str("\r\n");
     }
     Ok(output)
 }
 
-pub fn render_provider(provider: Provider, snapshot: Option<&ProviderSnapshot>) -> String {
+pub fn render_provider(
+    provider: Provider,
+    snapshot: Option<&ProviderSnapshot>,
+    now_unix: u64,
+) -> String {
     match snapshot {
         Some(snapshot) => format!(
             "{} {}\r\n  {}",
             provider.display_name(),
             snapshot.severity().label(),
-            snapshot.summary()
+            dashboard_summary(snapshot, now_unix)
         ),
         None => format!("{} N/A\r\n  unavailable", provider.display_name()),
     }
@@ -72,22 +78,34 @@ pub fn render_provider(provider: Provider, snapshot: Option<&ProviderSnapshot>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{UsageWindow, WindowKind};
+    use crate::model::{ResetAt, UsageWindow, WindowKind};
     use tempfile::tempdir;
 
     #[test]
-    fn renders_compact_remaining_values_without_timestamps() {
+    fn renders_compact_remaining_values_with_reset_eta() {
         let snapshot = ProviderSnapshot::new(
             Provider::Claude,
             vec![
-                UsageWindow::new(WindowKind::FiveHour, 58.0, Some("2026-08-15".into())).unwrap(),
-                UsageWindow::new(WindowKind::Weekly, 27.0, Some("2026-08-22".into())).unwrap(),
+                UsageWindow::new(
+                    WindowKind::FiveHour,
+                    58.0,
+                    Some(ResetAt::from_unix_seconds(14_820)),
+                )
+                .unwrap(),
+                UsageWindow::new(
+                    WindowKind::Weekly,
+                    27.0,
+                    Some(ResetAt::from_unix_seconds(183_600)),
+                )
+                .unwrap(),
             ],
             1,
         );
-        let rendered = render_provider(Provider::Claude, Some(&snapshot));
-        assert_eq!(rendered, "Claude OK\r\n  5h 42% left · week 73% left");
-        assert!(!rendered.contains("2026"));
+        let rendered = render_provider(Provider::Claude, Some(&snapshot), 0);
+        assert_eq!(
+            rendered,
+            "Claude OK\r\n  5h 42% left │ reset 4h07m · week 73% left │ reset 2d3h"
+        );
     }
 
     #[test]

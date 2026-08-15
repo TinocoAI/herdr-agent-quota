@@ -55,7 +55,7 @@ the user. Between triggers, the last successful value remains visible indefinite
 - xAI developer/API-team usage. Grok must show the SuperGrok weekly pool.
 - Browser Cookie, Keychain, or web-page scraping fallbacks.
 - A resident polling daemon, OS service, or scheduled job.
-- Live countdowns, reset/update timestamps, `updated N minutes ago`, automatic stale
+- Resident minute-by-minute countdowns, `updated N minutes ago`, automatic stale
   transitions, alerts, notifications, or usage history.
 - Windows support.
 - Automatic login, token refresh, or credential migration for any provider.
@@ -95,21 +95,21 @@ readable tokens and keeps the old pair for existing configurations:
 - `$quota_icon`: compact text markers `◈C`, `✕G`, `✦Cl`, or `△Ag`.
 - `$quota_provider`: `Codex`, `Grok`, `Claude`, or `Agy` for custom layouts.
 - `$quota_status`: `OK`, `WARN`, `LOW`, or `N/A`.
-- `$quota_5h`: compact five-hour remaining value when the provider exposes it.
-- `$quota_week`: compact weekly remaining value.
-- `$quota_summary`: provider-specific compact remaining values.
-- `$quota_topic`: latest user prompt extracted from recent pane output, with the
-  native terminal title as fallback.
+- `$quota_5h`: compact five-hour remaining value and reset ETA when exposed.
+- `$quota_week`: compact weekly remaining value and reset ETA.
+- `$quota_summary`: window-driven compact remaining values and reset ETAs.
+- `$quota_topic`: latest user prompt extracted from recent pane output.
 - `$quota_error`: short reason, intended for diagnostics rather than the default row.
 
 Recommended compact values:
 
 ```text
 ● Owner · Grok
-week 39%
+week 39% │ reset 2d3h
 B-325 budget cap
 ● Owner · Claude
-5h 42% · week 73%
+  5h     42%  reset 3h07m
+  week   73%  reset 2d3h
 refactor auth middleware
 ```
 
@@ -335,9 +335,10 @@ requests on the user's behalf.
 3. Back up the original once with a deterministic adjacent name.
 4. Retain Herdr's official `state_icon`/`tab` row (without the directory),
    add the plugin-owned `$quota_topic` as its own row, add
-   `$quota_provider` to the plane row, and add one compact quota-summary row.
-   The topic token is extracted from the latest pane output on event refresh,
-   with Herdr's server-owned terminal title as fallback. This keeps every
+   `$quota_provider` to the plane row, and add separate `$quota_5h` and
+   `$quota_week` rows. Herdr elides the missing 5h token for weekly-only agents.
+   The topic token is extracted from the latest user prompt on event refresh;
+   it stays empty instead of falling back to AI status titles. This keeps every
    agent to three readable lines and shows the provider name only once. Users
    who want provider-specific styling can copy `$quota_provider`,
    `$quota_summary`, and `$quota_topic` into `rows_by_agent`;
