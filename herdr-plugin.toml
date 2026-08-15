@@ -19,7 +19,7 @@ command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quo
 [[actions]]
 id = "configure"
 title = "Configure agent quota sidebar"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" configure --check"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" configure --apply"]
 
 [[events]]
 id = "agent-quota-refresh"

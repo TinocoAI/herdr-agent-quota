@@ -72,16 +72,20 @@ with the official `statusLine` `rate_limits` fields, and Agy/Antigravity
 supported.
 
 ```sh
-cargo test --locked
-cargo build --release --locked
 herdr plugin link .
+./target/release/herdr-agent-quota configure --apply
+herdr server reload-config
 ```
 
-Then use the Herdr plugin action `Refresh agent quota` or run:
+`herdr plugin link .` builds the Rust binary and registers the startup/event
+hooks. The Herdr action `Configure agent quota sidebar` applies the same
+idempotent setup; the explicit command above is useful for a first install.
+Use the `Refresh agent quota` action for a manual one-shot refresh.
+
+To preview the change without writing, run:
 
 ```sh
 ./target/release/herdr-agent-quota configure --check
-./target/release/herdr-agent-quota configure --apply
 ```
 
 `configure --apply` makes a small, idempotent sidebar-row edit and installs the
