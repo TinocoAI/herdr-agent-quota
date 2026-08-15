@@ -1,75 +1,24 @@
 # herdr-agent-quota
 
-Show Claude Code, Codex, Grok, and Agy subscription usage in Herdr's agent
-sidebar.
+[![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Herdr plugin](https://img.shields.io/badge/Herdr-plugin-0.8%2B-5b6ee1)](https://herdr.dev/docs/plugins/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/levi-qiao/herdr-agent-quota?style=social)](https://github.com/levi-qiao/herdr-agent-quota)
 
-![Herdr agent quota sidebar preview](docs/screenshots/sidebar-quota.png)
+Live Claude Code, Codex, Grok, and Agy/Antigravity subscription quotas in
+Herdr's agent sidebar. See the provider once, the remaining usage on the next
+line, and the current CLI topic below it.
 
-The checked-in preview is sanitized: it contains no account, workspace, or
-credential data.
+![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
-This Rust plugin keeps the latest successful provider snapshot in a small local
-cache and publishes compact text tokens to Herdr agent rows. It does not run a
-resident daemon: Herdr startup, agent events, or a manual refresh perform a
-one-shot update. If a later refresh fails, the previous value remains visible.
+This is a real local Herdr session screenshot supplied for the project. The
+values and topic text are examples from that session; they are not hard-coded
+in the plugin.
 
-## What it shows
+## Quick start
 
-```text
-Codex OK
-  week 39% left
-Grok WARN
-  week 21% left
-Claude OK
-  5h 42% left · week 73% left
-Agy OK
-  5h 99.7% left · week 99.7% left
-```
-
-The value is the percentage left in the provider's subscription window, not a
-token count. `OK` means more than 30% remains, `WARN` means 10–30% remains, and
-`LOW` means less than 10% remains. `N/A` means that provider has never produced
-a usable snapshot on this machine. The plugin keeps the last successful value;
-a failed refresh does not replace it with `unavailable`.
-
-The sidebar is intentionally text-based. Herdr plugin v1 accepts custom text
-tokens but cannot inject brand SVG/PNG icons into its Agent renderer. The
-default layout therefore keeps the provider name once and omits decorative
-markers; the optional legacy marker tokens remain available for custom layouts.
-
-## Data sources and privacy
-
-- Codex: the local `codex app-server --stdio` JSON-RPC account/rate-limits
-  contract. Only the seven-day window is shown. API-key mode is reported as
-  unavailable because it is not the ChatGPT subscription quota.
-- Grok: the local `~/.grok/auth.json` login key is read in memory and sent to the
-  Grok CLI billing backend used by Grok Build. The response is accepted only when
-  its period is explicitly weekly. This is SuperGrok subscription usage, not xAI
-  developer/API-team billing.
-- Claude Code: the official `statusLine` JSON hook supplies five-hour and
-  seven-day windows. `configure --apply` backs up and chains an existing
-  statusLine command.
-- Agy/Antigravity: the official [`/usage` quota panel](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
-  and `statusLine` JSON `quota` object supply
-  `gemini-5h`/`gemini-weekly` and `3p-5h`/`3p-weekly` windows. The sidebar uses
-  the lowest remaining value when both pools are present, so one Agy row is
-  conservative across Gemini and Claude/GPT model groups. No public API or
-  browser credential is used.
-
-The plugin does not access browser Cookies or browser Keychains, does not upload
-usage data, does not refresh provider credentials, and does not save bearer or
-refresh tokens. Provider failures never replace a successful cached snapshot.
-
-The Grok CLI billing endpoint is an internal CLI contract rather than a public
-stability guarantee. If xAI changes it, the plugin leaves the previous value in
-place and reports the failure in the detail pane/action output.
-
-## Build and local link
-
-Requirements: Herdr `v0.8.0+`, Rust `1.95.0`, Codex `0.147.0`, Claude Code
-with the official `statusLine` `rate_limits` fields, and Agy/Antigravity
-`1.1.x` for its official `statusLine` `quota` object. macOS and Linux are
-supported.
+Requirements: Herdr `0.8.0+`, Rust `1.95+`, macOS or Linux, and at least one
+supported CLI. From this repository:
 
 ```sh
 herdr plugin link .
@@ -77,21 +26,66 @@ herdr plugin link .
 herdr server reload-config
 ```
 
-`herdr plugin link .` builds the Rust binary and registers the startup/event
-hooks. The Herdr action `Configure agent quota sidebar` applies the same
-idempotent setup; the explicit command above is useful for a first install.
-Use the `Refresh agent quota` action for a manual one-shot refresh.
+That is the complete Herdr setup. `herdr plugin link .` builds the Rust binary
+and registers the startup/event hooks. `configure --apply` makes an idempotent
+three-row sidebar edit and installs a reversible Claude Code `statusLine`
+wrapper. You can run the same setup from Herdr's action menu with **Configure
+agent quota sidebar**. Use **Refresh agent quota** for a one-shot refresh.
 
-To preview the change without writing, run:
+Preview the changes without writing anything:
 
 ```sh
 ./target/release/herdr-agent-quota configure --check
 ```
 
-`configure --apply` makes a small, idempotent sidebar-row edit and installs the
-reversible Claude statusLine wrapper. `configure --uninstall` removes only the
-plugin-owned row and restores the previous Claude statusLine. The manual sidebar
-row is:
+The setup preserves Herdr's native state dot and plane/tab label. It only adds
+the provider, usage, and topic tokens, so the original Herdr agent indicator is
+not removed. `configure --uninstall` removes the plugin-owned row and restores
+the previous Claude statusLine.
+
+## Supported CLIs
+
+| CLI | Sidebar windows | Local collection path | Extra setup |
+| --- | --- | --- | --- |
+| Claude Code `2.1.232` | `5h` + `week` | Official `statusLine` JSON: `rate_limits.five_hour` and `seven_day` | `configure --apply` chains an existing `statusLine` command |
+| OpenAI Codex `0.147.0` | `week` | One-shot local `codex app-server --stdio`, `account/rateLimits/read` | ChatGPT subscription login; API-key mode is shown as unavailable |
+| Grok CLI / Grok Build `1.0.3` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Log in to Grok CLI; no xAI team/API billing is queried |
+| Agy / Antigravity CLI `1.1.13` | `5h` + `week` | Official `statusLine` JSON `quota` object (`gemini-*` and `3p-*` pools) | Set the native `/statusline` command once (below) |
+
+Versions above were checked on the development machine on 2026-08-15. The
+parser follows the provider fields rather than hard-coding these version
+strings, so newer compatible CLI releases can continue to work.
+
+The sidebar shows **percentage remaining**, not token counts or reset times:
+
+```text
+● Owner · Claude
+  5h 100% · week 31%
+  hi
+```
+
+Codex and Grok expose their weekly window. Claude Code and Agy expose both
+five-hour and weekly windows. A failed refresh never replaces a successful
+cached value with `unavailable`; a provider without any successful snapshot is
+shown as `N/A` until its first usable event.
+
+## Agy / Antigravity setup
+
+Agy sends its quota snapshot to the plugin through its native one-shot
+`statusLine` hook. Set the command in Agy once:
+
+```text
+/statusline /absolute/path/to/herdr-agent-quota/target/release/herdr-agent-quota agy-statusline
+```
+
+The hook reads JSON from stdin, writes only sanitized percentages to the local
+plugin cache, and exits. It is not a resident process and does not use browser
+cookies or a private API.
+
+## What the sidebar rows mean
+
+The default rows are deliberately compact and keep the provider name only
+once:
 
 ```toml
 [ui.sidebar.agents]
@@ -102,27 +96,60 @@ rows = [
 ]
 ```
 
-这保留 Herdr 官方的状态/plane 提示，但不展示目录；第一行是 `Owner · Grok`，第二行只放额度，第三行单独显示 CLI 话题。
-`$quota_topic` 由插件在事件触发时读取 pane 最近输出，提取最新用户输入；读取不到时回退到 Herdr 的原生终端标题，不需要常驻进程。
-如果你已有自己的 `rows`，保留原有 token，只加入 `$quota_provider`、`$quota_summary` 和 `$quota_topic`。
+- `state_icon` and `tab` are Herdr's built-in status and plane labels.
+- `$quota_provider` is `Claude`, `Codex`, `Grok`, or `Agy`.
+- `$quota_summary` is the compact `5h ... · week ...` or `week ...` line.
+- `$quota_topic` is the latest prompt/topic found in the pane output.
 
-Herdr 左侧只能渲染文本 token，不能由插件注入 SVG；仓库中的
-[`docs/icons/`](docs/icons/) 保留为详情 pane/README 的可选视觉资产，默认 sidebar 不再显示图标标记。
+Herdr plugin v1 accepts text tokens, not provider image components. For that
+reason the default layout uses the readable provider name and keeps Herdr's
+native dot instead of adding low-recognition Unicode or SVG markers. The
+checked-in [`docs/icons/`](docs/icons/) assets are optional visual references;
+they are not injected into the native sidebar.
 
-To feed Agy's lightweight statusLine hook, set its native `/statusline` command
-to the built binary (the command receives JSON on stdin):
+The topic reader is event-driven: it scans recent pane output after an agent
+event, prefers the latest user prompt, and falls back to the native terminal
+title when the CLI has not printed a prompt yet. It does not show the working
+directory.
 
-```text
-/statusline /absolute/path/to/herdr-agent-quota/target/release/herdr-agent-quota agy-statusline
-```
+## Data sources and privacy
 
-This is a one-shot hook, not a resident process. It saves only the sanitized
-quota percentages locally and publishes them to the Agy agent row.
+- **Codex:** the local official [app-server JSON-RPC](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+  rate-limit response. The plugin accepts the seven-day window by duration,
+  rather than assuming which field is primary. API-key authentication is
+  intentionally not mislabeled as a ChatGPT subscription quota.
+- **Grok:** the local `~/.grok/auth.json` login key is read in memory and sent
+  to the weekly billing endpoint used by the Grok CLI. The response is accepted
+  only when it identifies a weekly period. This is SuperGrok usage, not xAI
+  developer/API-team billing.
+- **Claude Code:** the official [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline)
+  supplies the five-hour and seven-day values. A previous statusLine command is
+  backed up, chained, and restored by `configure --uninstall`.
+- **Agy/Antigravity:** the official [`/usage` and statusline docs](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
+  supply Gemini and third-party pools. When both pools exist, the sidebar uses
+  the lowest remaining percentage so the single Agy row is conservative.
 
-The optional `Agent quota` pane is read-only. Press `r` to force one refresh and
-`q` to close it; it does not poll.
+Snapshots and refresh markers stay in Herdr's plugin state directory. No usage
+data is uploaded, browser cookies or browser keychains are read, and provider
+credentials are never refreshed or written. Provider failures leave the last
+successful local value visible.
 
-## Development checks
+The Grok CLI billing endpoint is an internal CLI contract, not a public xAI
+developer API stability promise. If it changes, the plugin keeps the previous
+weekly value instead of clearing the sidebar.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| The rows do not appear | Run `herdr server reload-config`, then **Refresh agent quota**. |
+| Claude or Agy is `N/A` | Start a conversation so the native `statusLine` emits JSON; then refresh. |
+| Claude briefly changes while switching panes | The cached value is retained; run one prompt or a manual refresh if no snapshot exists yet. |
+| Agy has no quota | Confirm the native `/statusline` command points to the built `agy-statusline` hook. |
+| The topic is blank or old | Send a prompt in that pane; topic extraction runs on agent events and needs recent output. |
+| Existing Claude statusLine is not changed | Run `configure --check`; the plugin refuses unsafe non-command settings instead of overwriting them. |
+
+## Development
 
 ```sh
 cargo fmt --all -- --check
@@ -131,19 +158,24 @@ cargo test --all-targets --all-features --locked
 cargo build --release --locked
 ```
 
-See [`docs/research/codexbar-grok-usage.md`](docs/research/codexbar-grok-usage.md)
-for the Grok source investigation and
-[`docs/plans/herdr-agent-quota-implementation.md`](docs/plans/herdr-agent-quota-implementation.md)
-for the implementation contract.
+The Grok source investigation is documented in
+[`docs/research/codexbar-grok-usage.md`](docs/research/codexbar-grok-usage.md),
+and the implementation contract is in
+[`docs/plans/herdr-agent-quota-implementation.md`](docs/plans/herdr-agent-quota-implementation.md).
 
-## Herdr Marketplace discovery
+## Herdr Marketplace and discovery
 
-This repository includes the required root `herdr-plugin.toml` and the GitHub
-`herdr-plugin` topic. Herdr's marketplace indexes public repositories carrying
-that topic; the listing refresh is asynchronous. Additional discovery topics
-include `agy`, `antigravity`, `gemini`, `claude-code`, `codex`, `grok`,
-`agent-usage`, and `quota-monitor`.
+The repository includes the required root `herdr-plugin.toml`, is public, and
+uses the `herdr-plugin` GitHub topic. Herdr's marketplace indexes public repos
+with that topic; indexing is asynchronous. The repository also uses focused
+topics such as `claude-code`, `codex`, `grok`, `agy`, `antigravity`, `gemini`,
+`agent-usage`, `quota-monitor`, `usage-monitor`, `provider-usage`, `rust`, and
+`sidebar` so users can find it by provider or use case.
+
+If this saves you a pane switch, a GitHub star or a bug report with the CLI
+version helps prioritize the next provider parser.
 
 ## License
 
-MIT. This project is not affiliated with Herdr, OpenAI, Anthropic, xAI, or Google.
+MIT. This project is not affiliated with Herdr, OpenAI, Anthropic, xAI, or
+Google.

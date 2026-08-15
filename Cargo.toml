@@ -3,7 +3,7 @@ name = "herdr-agent-quota"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
-description = "Herdr plugin for Claude Code, Codex, Grok, and Agy subscription quota"
+description = "Herdr sidebar plugin for Claude Code, Codex, Grok, and Agy subscription quotas"
 license = "MIT"
 repository = "https://github.com/levi-qiao/herdr-agent-quota"
 
