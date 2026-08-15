@@ -26,7 +26,7 @@ fn interactive(cache: &CacheStore) -> Result<()> {
         );
         print!("{}", crossterm::cursor::MoveTo(0, 0));
         print_snapshot(cache)?;
-        println!("\nr refresh  q quit");
+        print!("\r\nr refresh  q quit\r\n");
         io::stdout().flush()?;
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
@@ -43,13 +43,18 @@ fn interactive(cache: &CacheStore) -> Result<()> {
 }
 
 fn print_snapshot(cache: &CacheStore) -> Result<()> {
-    println!("Herdr Agent Quota");
-    println!("=================");
+    print!("{}", render_snapshot(cache)?);
+    Ok(())
+}
+
+fn render_snapshot(cache: &CacheStore) -> Result<String> {
+    let mut output = String::from("Herdr Agent Quota\r\n=================\r\n");
     for provider in Provider::ALL {
         let snapshot = cache.load(provider)?;
-        println!("{}", render_provider(provider, snapshot.as_ref()));
+        output.push_str(&render_provider(provider, snapshot.as_ref()));
+        output.push_str("\r\n");
     }
-    Ok(())
+    Ok(output)
 }
 
 pub fn render_provider(provider: Provider, snapshot: Option<&ProviderSnapshot>) -> String {
@@ -68,6 +73,7 @@ pub fn render_provider(provider: Provider, snapshot: Option<&ProviderSnapshot>) 
 mod tests {
     use super::*;
     use crate::model::{UsageWindow, WindowKind};
+    use tempfile::tempdir;
 
     #[test]
     fn renders_compact_remaining_values_without_timestamps() {
@@ -82,5 +88,13 @@ mod tests {
         let rendered = render_provider(Provider::Claude, Some(&snapshot));
         assert_eq!(rendered, "[A] ● 5h 42% left · wk 73% left");
         assert!(!rendered.contains("2026"));
+    }
+
+    #[test]
+    fn snapshot_lines_return_to_column_zero_in_herdr_pty() {
+        let directory = tempdir().unwrap();
+        let rendered = render_snapshot(&CacheStore::new(directory.path())).unwrap();
+        assert!(rendered.contains("Quota\r\n=================\r\n[C]"));
+        assert!(!rendered.contains("Quota\n================="));
     }
 }
