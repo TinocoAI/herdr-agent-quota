@@ -2,7 +2,7 @@ use crate::cache::CacheStore;
 use crate::herdr::{list_agent_panes, publish_tokens};
 use crate::model::{MetadataTokens, Provider};
 use crate::providers::{claude, codex, grok};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -54,9 +54,12 @@ fn refresh_locked(
         let fetched = match provider {
             Provider::Codex => codex::fetch(),
             Provider::Grok => grok::fetch(),
-            Provider::Claude => Ok(cache
-                .load(Provider::Claude)?
-                .context("Claude usage is collected by the Claude statusLine hook")?),
+            Provider::Claude => match cache.load(Provider::Claude)? {
+                Some(snapshot) => Ok(snapshot),
+                None => Err(anyhow::anyhow!(
+                    "Claude usage is collected by the Claude statusLine hook"
+                )),
+            },
         };
         cache.mark_refresh(*provider, now)?;
         match fetched {
