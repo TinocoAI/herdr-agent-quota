@@ -1,5 +1,9 @@
 # herdr-agent-quota
 
+**Never hit a quota limit mid-task.** Live Claude Code, Codex, Grok, and
+Agy/Antigravity subscription usage, in Herdr's agent sidebar.
+
+[![CI](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml/badge.svg)](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Herdr plugin](https://img.shields.io/badge/Herdr-plugin-0.8%2B-5b6ee1)](https://herdr.dev/docs/plugins/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -7,15 +11,34 @@
 
 中文文档：[README.zh-CN.md](README.zh-CN.md)
 
-Live Claude Code, Codex, Grok, and Agy/Antigravity subscription quotas in
-Herdr's agent sidebar. See the provider once, the remaining usage on the next
-line, and the current CLI topic below it.
+```text
+● Owner · Claude
+  5h 100% · week 31%     ← percent remaining, not token counts
+  hi                     ← what that pane is actually working on
+```
 
 ![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
-This is a real local Herdr session screenshot supplied for the project. The
-values and topic text are examples from that session; they are not hard-coded
-in the plugin.
+- **Four CLIs, one row each** — Claude Code, Codex, Grok, Agy/Antigravity.
+- **Three lines per pane** — provider, remaining usage, current topic.
+- **Local only** — no usage data uploaded, no browser cookies, no keychain
+  scraping, and credentials are never written or refreshed.
+- **Never lies to you** — a failed refresh keeps the last good number instead
+  of flashing `unavailable`, and API-key auth is never shown as a subscription
+  quota.
+- **Fully reversible** — one command sets it up, one command puts your config
+  back exactly as it was.
+
+Install it in three commands ([quick start](#quick-start)):
+
+```sh
+herdr plugin link .
+./target/release/herdr-agent-quota configure --apply
+herdr server reload-config
+```
+
+The screenshot is a real local Herdr session. The values and topic text are
+examples from that session; they are not hard-coded in the plugin.
 
 ## Quick start
 
@@ -58,14 +81,7 @@ Versions above were checked on the development machine on 2026-08-15. The
 parser follows the provider fields rather than hard-coding these version
 strings, so newer compatible CLI releases can continue to work.
 
-The sidebar shows **percentage remaining**, not token counts or reset times:
-
-```text
-● Owner · Claude
-  5h 100% · week 31%
-  hi
-```
-
+The sidebar shows **percentage remaining**, not token counts or reset times.
 Codex and Grok expose their weekly window. Claude Code and Agy expose both
 five-hour and weekly windows. A failed refresh never replaces a successful
 cached value with `unavailable`; a provider without any successful snapshot is
@@ -160,22 +176,27 @@ cargo test --all-targets --all-features --locked
 cargo build --release --locked
 ```
 
+CI runs these on Linux and macOS for every pull request.
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers the design rules every parser
+follows and how to add a provider. Security reporting is in
+[`SECURITY.md`](SECURITY.md), and released changes are in
+[`CHANGELOG.md`](CHANGELOG.md).
+
 The Grok source investigation is documented in
 [`docs/research/codexbar-grok-usage.md`](docs/research/codexbar-grok-usage.md),
 and the implementation contract is in
 [`docs/plans/herdr-agent-quota-implementation.md`](docs/plans/herdr-agent-quota-implementation.md).
 
-## Herdr Marketplace and discovery
+## Contributing
 
-The repository includes the required root `herdr-plugin.toml`, is public, and
-uses the `herdr-plugin` GitHub topic. Herdr's marketplace indexes public repos
-with that topic; indexing is asynchronous. The repository also uses focused
-topics such as `claude-code`, `codex`, `grok`, `agy`, `antigravity`, `gemini`,
-`agent-usage`, `quota-monitor`, `usage-monitor`, `provider-usage`, `rust`, and
-`sidebar` so users can find it by provider or use case.
+Adding a CLI is deliberately small: a pure `parse_*` function, a redacted
+fixture, and a test. The rules it has to satisfy are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-If this saves you a pane switch, a GitHub star or a bug report with the CLI
-version helps prioritize the next provider parser.
+If this saved you a pane switch, a ⭐ helps other Herdr users find it. A bug
+report with your CLI version is even better — it decides which provider parser
+gets fixed next.
 
 ## License
 

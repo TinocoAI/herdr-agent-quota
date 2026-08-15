@@ -3,22 +3,29 @@ name = "herdr-agent-quota"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
-description = "Herdr sidebar plugin for Claude Code, Codex, Grok, and Agy subscription quotas"
+description = "Never hit a quota limit mid-task: live Claude, Codex, Grok and Agy usage in Herdr's agent sidebar"
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/levi-qiao/herdr-agent-quota"
+homepage = "https://github.com/levi-qiao/herdr-agent-quota"
+keywords = ["herdr", "claude-code", "codex", "quota", "usage"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["docs/screenshots/*", "docs/research/*", "docs/plans/*", ".github/*"]
 
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
 directories = "5.0"
-fs2 = "0.4"
-libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 toml_edit = "0.22"
 ureq = { version = "2.12", features = ["json"] }
+
+# Only used to put the Codex app-server in its own process group.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.14"

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the version, so rustup installs it with the
+      # rustfmt and clippy components this workflow needs.
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets --all-features --locked
+
+      - name: Build release
+        run: cargo build --release --locked
+
+  plugin-manifest:
+    name: plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Herdr refuses to load a plugin whose root manifest is missing or
+      # malformed, so a broken manifest must fail here rather than on install.
+      - name: Validate herdr-plugin.toml
+        run: |
+          python3 - <<'PY'
+          import sys, tomllib
+          with open("herdr-plugin.toml", "rb") as handle:
+              manifest = tomllib.load(handle)
+          for key in ("id", "name", "version", "min_herdr_version", "description"):
+              if not manifest.get(key):
+                  sys.exit(f"herdr-plugin.toml is missing required key: {key}")
+          print("herdr-plugin.toml is valid")
+          PY

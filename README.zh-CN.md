@@ -1,5 +1,9 @@
 # herdr-agent-quota
 
+**别再做到一半才发现额度用完。** 在 Herdr 左侧 Agents 列表中实时显示
+Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
+
+[![CI](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml/badge.svg)](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Herdr plugin](https://img.shields.io/badge/Herdr-plugin-0.8%2B-5b6ee1)](https://herdr.dev/docs/plugins/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -7,14 +11,32 @@
 
 [English README](README.md)
 
-在 Herdr 左侧 Agents 列表中显示 Claude Code、Codex、Grok 和
-Agy/Antigravity 的订阅额度。每个 agent 使用三行紧凑布局：第一行显示
-plane 和 CLI 名称，第二行显示剩余用量，第三行显示当前话题。
+```text
+● Owner · Claude
+  5h 100% · week 31%     ← 剩余百分比，不是 token 数
+  hi                     ← 这个 pane 当前在做什么
+```
 
 ![Herdr 左侧额度截图](docs/screenshots/herdr-sidebar-live.png)
 
-这是项目使用的真实 Herdr 本地会话截图。截图中的额度和话题来自当时的
-会话，不是插件写死的示例数据。
+- **四个 CLI，各占一行** —— Claude Code、Codex、Grok、Agy/Antigravity。
+- **每个 pane 三行** —— provider、剩余用量、当前话题。
+- **全本地** —— 不上传任何用量数据，不读浏览器 cookie 和系统钥匙串，
+  也不会写入或刷新凭证。
+- **不会给你错的数** —— 刷新失败时保留上一次的有效数值，而不是闪成
+  `unavailable`；API key 登录也不会被当成订阅额度显示。
+- **完全可回滚** —— 一条命令装好，一条命令原样还原你的配置。
+
+三条命令即可安装（[快速开始](#快速开始)）：
+
+```sh
+herdr plugin link .
+./target/release/herdr-agent-quota configure --apply
+herdr server reload-config
+```
+
+截图是真实的 Herdr 本地会话。其中的额度和话题来自当时的会话，
+不是插件写死的示例数据。
 
 ## 快速开始
 
@@ -153,21 +175,24 @@ cargo test --all-targets --all-features --locked
 cargo build --release --locked
 ```
 
+每个 PR 都会在 Linux 和 macOS 上跑这几条命令。
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) 说明了所有 parser 遵循的设计约束，
+以及如何新增一个 provider。安全问题反馈见 [`SECURITY.md`](SECURITY.md)，
+版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+
 Grok 调研记录见
 [`docs/research/codexbar-grok-usage.md`](docs/research/codexbar-grok-usage.md)，
 实现约定见
 [`docs/plans/herdr-agent-quota-implementation.md`](docs/plans/herdr-agent-quota-implementation.md)。
 
-## Herdr Marketplace 与发现
+## 参与贡献
 
-仓库根目录包含 `herdr-plugin.toml`，仓库为公开仓库，并设置了 GitHub
-`herdr-plugin` topic。Herdr Marketplace 会索引带有该 topic 的公开仓库，
-刷新是异步的。仓库同时设置了 `claude-code`、`codex`、`grok`、`agy`、
-`antigravity`、`gemini`、`agent-usage`、`quota-monitor`、`usage-monitor`、
-`provider-usage`、`rust`、`sidebar` 等主题，方便按 provider 或用途搜索。
+新增一个 CLI 的成本很低：一个纯函数 `parse_*`、一份脱敏 fixture、一个
+测试。具体约束见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
-如果这个插件帮你减少了 pane 切换，欢迎给仓库点 Star，或提交包含 CLI
-版本号的 issue，帮助我们优先支持下一批 provider。
+如果这个插件帮你少切了几次 pane，点个 ⭐ 能让更多 Herdr 用户找到它。
+提一个带 CLI 版本号的 issue 更有帮助 —— 它决定了下一个修哪个 provider。
 
 ## 许可证
 
