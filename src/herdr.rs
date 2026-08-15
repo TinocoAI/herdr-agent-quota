@@ -12,7 +12,7 @@ pub struct AgentPane {
 pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let output = Command::new(executable)
-        .args(["agent", "list", "--json"])
+        .args(["agent", "list"])
         .output()
         .context("list Herdr agents")?;
     if !output.status.success() {
