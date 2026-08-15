@@ -242,6 +242,7 @@ pub struct MetadataTokens {
     pub quota_5h: String,
     pub quota_week: String,
     pub quota_summary: String,
+    pub quota_topic: String,
     pub quota_error: Option<String>,
 }
 
@@ -256,6 +257,7 @@ impl MetadataTokens {
             quota_5h: sidebar_window(snapshot, WindowKind::FiveHour),
             quota_week: sidebar_window(snapshot, WindowKind::Weekly),
             quota_summary: snapshot.sidebar_summary(),
+            quota_topic: String::new(),
             quota_error: None,
         }
     }
@@ -273,6 +275,7 @@ impl MetadataTokens {
             },
             quota_week: "week N/A".to_string(),
             quota_summary: "unavailable".to_string(),
+            quota_topic: String::new(),
             quota_error: Some(reason.into().chars().take(80).collect()),
         }
     }

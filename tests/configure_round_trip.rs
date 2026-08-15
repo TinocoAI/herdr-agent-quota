@@ -17,6 +17,6 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
     let applied = add_quota_row(original).unwrap();
     assert!(applied.contains("[\"state_icon\", \"tab\", \"$quota_provider\"]"));
     assert!(applied.contains("[\"$quota_summary\"]"));
-    assert!(applied.contains("[\"terminal_title_stripped\"]"));
+    assert!(applied.contains("[\"$quota_topic\"]"));
     assert_eq!(applied.matches("[\"").count(), 3);
 }

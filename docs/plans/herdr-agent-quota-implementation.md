@@ -98,6 +98,8 @@ readable tokens and keeps the old pair for existing configurations:
 - `$quota_5h`: compact five-hour remaining value when the provider exposes it.
 - `$quota_week`: compact weekly remaining value.
 - `$quota_summary`: provider-specific compact remaining values.
+- `$quota_topic`: latest user prompt extracted from recent pane output, with the
+  native terminal title as fallback.
 - `$quota_error`: short reason, intended for diagnostics rather than the default row.
 
 Recommended compact values:
@@ -331,11 +333,13 @@ requests on the user's behalf.
 2. Parse and edit with a format-preserving TOML editor.
 3. Back up the original once with a deterministic adjacent name.
 4. Retain Herdr's official `state_icon`/`tab` row (without the directory),
-   add Herdr's server-owned `terminal_title_stripped` topic as its own row,
-   add `$quota_provider` to the plane row, and add one compact quota-summary
-   row. This keeps every agent to three readable lines and shows the provider
-   name only once. Users who want provider-specific styling can copy
-   `$quota_provider` and `$quota_summary` into `rows_by_agent`;
+   add the plugin-owned `$quota_topic` as its own row, add
+   `$quota_provider` to the plane row, and add one compact quota-summary row.
+   The topic token is extracted from the latest pane output on event refresh,
+   with Herdr's server-owned terminal title as fallback. This keeps every
+   agent to three readable lines and shows the provider name only once. Users
+   who want provider-specific styling can copy `$quota_provider`,
+   `$quota_summary`, and `$quota_topic` into `rows_by_agent`;
    the helper does not overwrite those projections.
 5. Be idempotent: a second apply produces no diff.
 6. Validate the resulting config before replacement. The user can apply it to a

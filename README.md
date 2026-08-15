@@ -94,13 +94,13 @@ row is:
 rows = [
   ["state_icon", "tab", "$quota_provider"],
   ["$quota_summary"],
-  ["terminal_title_stripped"],
+  ["$quota_topic"],
 ]
 ```
 
 这保留 Herdr 官方的状态/plane 提示，但不展示目录；第一行是 `Owner · Grok`，第二行只放额度，第三行单独显示 CLI 话题。
-`terminal_title_stripped` 是 Herdr 服务器实时维护的 CLI 终端标题，所以不需要常驻进程或插件轮询。
-如果你已有自己的 `rows`，保留原有 token，只加入 `$quota_provider`、`$quota_summary` 和 `terminal_title_stripped`。
+`$quota_topic` 由插件在事件触发时读取 pane 最近输出，提取最新用户输入；读取不到时回退到 Herdr 的原生终端标题，不需要常驻进程。
+如果你已有自己的 `rows`，保留原有 token，只加入 `$quota_provider`、`$quota_summary` 和 `$quota_topic`。
 
 Herdr 左侧只能渲染文本 token，不能由插件注入 SVG；仓库中的
 [`docs/icons/`](docs/icons/) 保留为详情 pane/README 的可选视觉资产，默认 sidebar 不再显示图标标记。

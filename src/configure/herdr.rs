@@ -3,13 +3,14 @@ use std::fs;
 use std::path::PathBuf;
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 8] = [
+const QUOTA_ROW_MARKERS: [&str; 9] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
     "$quota_provider",
     "$quota_status",
     "$quota_summary",
+    "$quota_topic",
     "$quota_5h",
     "$quota_week",
 ];
@@ -142,7 +143,10 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
     for row in rows.iter() {
         let cleaned = strip_quota_tokens(row);
         if cleaned.len() == 1
-            && cleaned.iter().next().and_then(Value::as_str) == Some("terminal_title_stripped")
+            && matches!(
+                cleaned.iter().next().and_then(Value::as_str),
+                Some("terminal_title_stripped") | Some("$quota_topic")
+            )
         {
             continue;
         }
@@ -237,7 +241,7 @@ fn append_quota_rows(rows: &mut Array) {
         let mut cleaned = Array::new();
         for item in items.iter() {
             match item.as_str() {
-                Some("terminal_title_stripped") => {}
+                Some("terminal_title_stripped") | Some("$quota_topic") => {}
                 Some("agent") if !has_state_icon => {}
                 _ => cleaned.push(item.clone()),
             }
@@ -286,7 +290,7 @@ fn append_quota_rows(rows: &mut Array) {
     }
 
     let mut topic_row = Array::new();
-    topic_row.push("terminal_title_stripped");
+    topic_row.push("$quota_topic");
     rows.push(Value::Array(topic_row));
 }
 
