@@ -65,10 +65,11 @@ health     = quota_left / time_left
 - **Amber fallback** — reset data is missing or expired, so the plugin avoids
   claiming that the quota is safe.
 
-This explains the screenshot: Claude's weekly 24% is green because only about
-13% of the week remains, while Grok's weekly 20% is amber because about 69% of
-its window remains. The calculation is shared by every provider adapter; only
-the window data differs.
+This explains the screenshot: Claude's 5-hour 89% is amber because slightly
+more than 89% of that window remains; its weekly 24% is green because only about
+13% of the week remains. Grok's weekly 17% is red because about 69% of its
+window remains and the quota is already below 20%. The calculation is shared by
+every provider adapter; only the window data differs.
 
 ## Quick start
 
@@ -146,21 +147,20 @@ row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
-  [{ token = "$quota_5h_normal", fg = "#2e8b57", bold = true, dim = false }],
-  [{ token = "$quota_5h_warning", fg = "#c47f00", bold = true, dim = false }],
-  [{ token = "$quota_5h_danger", fg = "#d14343", bold = true, dim = false }],
-  [{ token = "$quota_week_normal", fg = "#2e8b57", bold = true, dim = false }],
-  [{ token = "$quota_week_warning", fg = "#c47f00", bold = true, dim = false }],
-  [{ token = "$quota_week_danger", fg = "#d14343", bold = true, dim = false }],
+  [{ token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false }],
+  [{ token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false }],
+  [{ token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false }],
+  [{ token = "$quota_week_normal", fg = "#84b084", bold = true, dim = false }],
+  [{ token = "$quota_week_warning", fg = "#cdaa65", bold = true, dim = false }],
+  [{ token = "$quota_week_danger", fg = "#ca6470", bold = true, dim = false }],
 ]
 ```
 
 - `state_icon` and `tab` are Herdr's built-in status and plane labels.
 - `$quota_provider` is `Claude`, `Codex`, `Grok`, or `Agy`.
 - Default provider labels use recognizable brand colors without affecting quota
-  health: Claude coral-orange, Codex blue, adaptive monochrome for Grok, and a
-  green from Antigravity's multicolor palette for Agy. Grok inherits the theme
-  foreground, so it is white on dark themes and black on light themes.
+  health: Claude soft orange, Codex pastel blue, Grok soft white, and an
+  Antigravity-inspired mint for Agy.
 - `$quota_topic` comes before the quota rows so the card reads as agent, task,
   then resource status.
 - Each window publishes exactly one styled variant. Color follows runway rather
@@ -175,9 +175,9 @@ rows = [
   unstyled layouts.
 
 Herdr 0.8 only accepts fixed hex colors for styled tokens, not semantic theme
-colors. The green, slightly brighter amber, and red defaults use medium tones
-and bold text so they remain distinguishable on common dark and light
-backgrounds.
+colors. The default palette uses soft, high-luminance green, amber, and red
+tones to reduce eye strain on Herdr's dark sidebar while keeping each health
+state easy to scan.
 
 Provider styling uses Herdr's static `rows_by_agent` projection, while quota
 health remains dynamic metadata. This keeps branding and health logic separate

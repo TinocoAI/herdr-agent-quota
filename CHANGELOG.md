@@ -49,8 +49,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on-pace usage is bold green, behind-pace usage is brighter amber, and
   behind-pace usage below 20% remaining is bold red.
 - Provider labels now use separate brand-aware `rows_by_agent` styling: Claude
-  coral-orange, Codex blue, theme-adaptive monochrome for Grok, and Antigravity
-  green for Agy. Existing user-owned agent row overrides remain untouched.
+  soft orange, Codex pastel blue, soft white for Grok, and Antigravity-inspired
+  mint for Agy. Quota health colors use the same low-strain pastel palette.
+  Existing user-owned agent row overrides remain untouched.
 
 - Dropped the unmaintained `fs2` dependency in favour of the standard library's
   file locking, and made `libc` a Unix-only dependency.
