@@ -97,8 +97,22 @@ impl CacheStore {
         now_unix: u64,
         interval_seconds: u64,
     ) -> Result<bool> {
-        let path = self.refresh_marker_path(provider);
-        let Ok(contents) = fs::read_to_string(&path) else {
+        self.should_debounce_key(provider.source(), now_unix, interval_seconds)
+    }
+
+    pub fn mark_refresh(&self, provider: Provider, now_unix: u64) -> Result<()> {
+        self.mark_key(provider.source(), now_unix)
+    }
+
+    /// Debounce anything that is not a provider refresh, such as the work the
+    /// Claude statusLine hook does on every tick.
+    pub fn should_debounce_key(
+        &self,
+        key: &str,
+        now_unix: u64,
+        interval_seconds: u64,
+    ) -> Result<bool> {
+        let Ok(contents) = fs::read_to_string(self.marker_path(key)) else {
             return Ok(false);
         };
         let Ok(last) = contents.trim().parse::<u64>() else {
@@ -107,10 +121,9 @@ impl CacheStore {
         Ok(now_unix.saturating_sub(last) < interval_seconds)
     }
 
-    pub fn mark_refresh(&self, provider: Provider, now_unix: u64) -> Result<()> {
+    pub fn mark_key(&self, key: &str, now_unix: u64) -> Result<()> {
         self.ensure()?;
-        fs::write(self.refresh_marker_path(provider), now_unix.to_string())
-            .context("write refresh marker")
+        fs::write(self.marker_path(key), now_unix.to_string()).context("write refresh marker")
     }
 
     pub fn now_unix() -> u64 {
@@ -131,8 +144,8 @@ impl CacheStore {
         self.root.join(format!("{}.json", provider.source()))
     }
 
-    fn refresh_marker_path(&self, provider: Provider) -> PathBuf {
-        self.root.join(format!("{}.refresh", provider.source()))
+    fn marker_path(&self, key: &str) -> PathBuf {
+        self.root.join(format!("{key}.refresh"))
     }
 }
 

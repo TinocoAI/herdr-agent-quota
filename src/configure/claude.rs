@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const BACKUP_FILE: &str = "claude-statusline.original.json";
+const PUBLISH_MARKER: &str = "claude-statusline-publish";
+const PUBLISH_INTERVAL_SECONDS: u64 = 30;
 
 pub fn check() -> Result<()> {
     let path = settings_path()?;
@@ -111,10 +113,10 @@ pub fn run_statusline_hook() -> Result<()> {
     let snapshot = run_statusline(&input).ok();
     if let Some(snapshot) = &snapshot {
         if let Ok(cache) = CacheStore::from_env() {
+            // Saving is a single local file write, so it stays on every tick
+            // and keeps the cached quota current.
             if cache.save(snapshot).is_ok() {
-                let panes = list_agent_panes().unwrap_or_default();
-                let tokens = [(Provider::Claude, MetadataTokens::from_snapshot(snapshot))];
-                let _ = publish_tokens(&panes, &tokens, CacheStore::now_millis());
+                publish_throttled(&cache, snapshot);
             }
         }
     }
@@ -157,6 +159,31 @@ pub fn run_statusline_hook() -> Result<()> {
         std::process::exit(output.status.code().unwrap_or(1));
     }
     Ok(())
+}
+
+/// Push quota tokens to the sidebar, but at most once per interval.
+///
+/// Claude re-runs its statusLine command constantly, and this hook is that
+/// command. Publishing on every tick meant one `herdr agent list`, one
+/// `herdr pane read` per agent pane, and one `herdr pane report-metadata`
+/// aimed at the very pane Claude was painting into — six subprocesses and
+/// most of a second, several times a second, all to re-send percentages that
+/// change a few times an hour. Agent events publish on their own, so a stale
+/// window here costs nothing.
+fn publish_throttled(cache: &CacheStore, snapshot: &crate::model::ProviderSnapshot) {
+    let now = CacheStore::now_unix();
+    if cache
+        .should_debounce_key(PUBLISH_MARKER, now, PUBLISH_INTERVAL_SECONDS)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if cache.mark_key(PUBLISH_MARKER, now).is_err() {
+        return;
+    }
+    let panes = list_agent_panes().unwrap_or_default();
+    let tokens = [(Provider::Claude, MetadataTokens::from_snapshot(snapshot))];
+    let _ = publish_tokens(&panes, &tokens, CacheStore::now_millis());
 }
 
 fn can_chain_statusline(status_line: Option<&Value>) -> bool {

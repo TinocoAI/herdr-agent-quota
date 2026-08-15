@@ -21,6 +21,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the request thread now share the child and terminate it at most once.
 - A failed cache rename no longer leaves its scratch file behind.
 
+- Throttled the Claude statusLine hook's sidebar publish to once every 30
+  seconds. Claude re-runs its statusLine command constantly, and the hook was
+  spawning six `herdr` subprocesses per tick — including a `report-metadata`
+  aimed at the pane Claude was painting into — taking most of a second, to
+  re-send percentages that change a few times an hour.
+
 ### Changed
 
 - Dropped the unmaintained `fs2` dependency in favour of the standard library's
