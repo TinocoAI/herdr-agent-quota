@@ -199,7 +199,7 @@ impl MetadataTokens {
             quota_badge: provider.badge().to_string(),
             quota_state: Severity::Unknown.symbol().to_string(),
             quota_summary: "unavailable".to_string(),
-            quota_error: Some(reason.into()),
+            quota_error: Some(reason.into().chars().take(80).collect()),
         }
     }
 }
@@ -260,5 +260,11 @@ mod tests {
     fn provider_aliases_are_explicit() {
         assert_eq!("claude-code".parse::<Provider>().unwrap(), Provider::Claude);
         assert_eq!(Provider::Grok.badge(), "[X]");
+    }
+
+    #[test]
+    fn unavailable_error_fits_herdr_token_limit() {
+        let values = MetadataTokens::unavailable(Provider::Grok, "x".repeat(120));
+        assert_eq!(values.quota_error.as_deref().unwrap().len(), 80);
     }
 }
