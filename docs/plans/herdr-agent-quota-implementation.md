@@ -29,11 +29,12 @@ the user. Between triggers, the last successful value remains visible indefinite
 - One active local account per provider.
 - Text provider names: `Codex`, `Grok`, `Claude`, and `Agy`.
 - Remaining percentage is the primary number.
-- Remaining-value severity:
-  - `> 30%`: normal, symbol `●`.
-  - `10%..=30%`: warning, symbol `▲`.
-  - `< 10%`: danger, symbol `!`.
-  - no usable value: unknown, symbol `?`.
+- Time-aware severity compares remaining quota percentage with the percentage of
+  the 5-hour or 7-day window still remaining:
+  - quota at or ahead of time progress: normal, symbol `●`.
+  - quota behind time progress: warning, symbol `▲`.
+  - quota behind time progress and below `20%`: danger, symbol `!`.
+  - missing or expired reset time: unknown, symbol `?`.
 - Static provider badge styling through Herdr `rows_by_agent`.
 - Dynamic severity represented by readable `OK`, `WARN`, `LOW`, and `N/A` labels;
   legacy symbol tokens remain available for compatibility.
@@ -105,12 +106,12 @@ Recommended compact values:
 
 ```text
 ● Owner · Grok
-week 39% │ reset 2d3h
 B-325 budget cap
+week 39% reset 2d3h
 ● Owner · Claude
-  5h     42%  reset 3h07m
-  week   73%  reset 2d3h
 refactor auth middleware
+5h 42% reset 3h07m
+week 73% reset 2d3h
 ```
 
 The same provider-level snapshot is repeated on every matching agent pane. Token
@@ -339,10 +340,9 @@ requests on the user's behalf.
    `$quota_week` rows. Herdr elides the missing 5h token for weekly-only agents.
    The topic token is extracted from the latest user prompt on event refresh;
    it stays empty instead of falling back to AI status titles. This keeps every
-   agent to three readable lines and shows the provider name only once. Users
-   who want provider-specific styling can copy `$quota_provider`,
-   `$quota_summary`, and `$quota_topic` into `rows_by_agent`;
-   the helper does not overwrite those projections.
+   agent to three readable lines and shows the provider name only once. The
+   helper adds brand-colored `rows_by_agent` projections for providers without
+   an existing override and never replaces user-owned projections.
 5. Be idempotent: a second apply produces no diff.
 6. Validate the resulting config before replacement. The user can apply it to a
    running Herdr session with `herdr server reload-config`.
@@ -395,10 +395,10 @@ cargo check --locked
 
 Owner scope: `src/model.rs`, `src/cache.rs`, `src/cli.rs`, initial `src/main.rs`.
 
-- Implement validated percentages, remaining calculation, severity thresholds,
+- Implement validated percentages, remaining calculation, time-aware severity,
   provider snapshots, atomic cache, lock, and 60-second debounce.
 - Define the approved commands without provider logic.
-- Unit-test boundary percentages: 0, 9.99, 10, 30, 30.01, and 100.
+- Unit-test on-pace, behind-pace, low-but-safe, danger, and missing-reset cases.
 - Test that failed refreshes cannot replace a successful cache.
 
 Exit criterion: provider adapters can be implemented behind a small function that

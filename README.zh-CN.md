@@ -13,15 +13,15 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 
 ```text
 ● Owner · Claude
-  5h    100%  reset 3h07m
-  week   31%  reset 2d3h
   hi                     ← 这个 pane 当前在做什么
+  5h 100% reset 3h07m
+  week 31% reset 2d3h
 ```
 
 ![Herdr 左侧额度截图](docs/screenshots/herdr-sidebar-live.png)
 
 *真实的 Herdr 工作区：Claude 分行显示 5 小时和周额度及其重置倒计时，
-Codex、Grok 显示周额度；每张 agent 卡片最后一行来自用户最后一次输入，
+Codex、Grok 显示周额度；每张 agent 卡片的话题来自用户最后一次输入，
 不会使用 AI 生成的状态标题。*
 
 - **四个 CLI，一个侧栏** —— Claude Code、Codex、Grok、Agy/Antigravity。
@@ -42,6 +42,26 @@ herdr server reload-config
 
 截图是真实的 Herdr 本地会话。其中的额度和话题来自当时的会话，
 不是插件写死的示例数据。
+
+### 按时间进度计算额度健康度
+
+颜色回答的是“当前额度能否撑到重置”，而不是简单套用固定百分比阈值。
+对于每个可用的 5 小时或 7 天窗口，插件统一计算：
+
+```text
+剩余时间比例 = (重置时间 - 当前时间) / 窗口总时长
+剩余额度比例 = remaining_percent / 100
+健康度       = 剩余额度比例 / 剩余时间比例
+```
+
+- **绿色** —— 健康度 `>= 1`：额度消耗速度不快于时间进度。
+- **琥珀色** —— 健康度 `< 1`：当前消耗已经快于可持续速度。
+- **红色** —— 健康度 `< 1` 且剩余额度低于 20%：额度不足且预计无法撑到重置。
+- **琥珀色兜底** —— reset 缺失或过期，不把无法判断的数据错误标成安全。
+
+截图中的 Claude 周额度虽然只剩 24%，但本周时间只剩约 13%，所以仍为绿色；
+Grok 周额度剩 20%，窗口时间却还剩约 69%，所以显示琥珀色。所有 provider
+共用同一套计算，适配器只负责提供窗口数据。
 
 ## 快速开始
 
@@ -89,9 +109,9 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。执行
 
 ```text
 ● Owner · Claude
-  5h    100%  reset 3h07m
-  week   31%  reset 2d3h
   hi
+  5h 100% reset 3h07m
+  week 31% reset 2d3h
 ```
 
 Codex 和 Grok 提供周额度；Claude Code 和 Agy 提供 5 小时额度与周额度。
@@ -120,21 +140,40 @@ Agy 通过原生的一次性 `statusLine` hook 把额度 JSON 传给插件。在
 [ui.sidebar.agents]
 row_gap = 1 # herdr-agent-quota
 rows = [
-  ["state_icon", "tab", "$quota_provider"],
-  ["$quota_5h"],
-  ["$quota_week"],
-  ["$quota_topic"],
+  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
+  [{ token = "$quota_topic", dim = false }],
+  [{ token = "$quota_5h_normal", fg = "#2e8b57", bold = true, dim = false }],
+  [{ token = "$quota_5h_warning", fg = "#c47f00", bold = true, dim = false }],
+  [{ token = "$quota_5h_danger", fg = "#d14343", bold = true, dim = false }],
+  [{ token = "$quota_week_normal", fg = "#2e8b57", bold = true, dim = false }],
+  [{ token = "$quota_week_warning", fg = "#c47f00", bold = true, dim = false }],
+  [{ token = "$quota_week_danger", fg = "#d14343", bold = true, dim = false }],
 ]
 ```
 
 - `state_icon`、`tab` 是 Herdr 内置的状态和 plane 标签。
 - `$quota_provider` 是 `Claude`、`Codex`、`Grok` 或 `Agy`。
-- `$quota_5h`、`$quota_week` 让每个额度窗口各占一行；Codex 和 Grok
-  没有 5h token 时，Herdr 会自动隐藏该行。
+- 默认 provider 名称使用易辨识的品牌色，并且不影响额度健康色：Claude
+  珊瑚橘、Codex 蓝、Grok 自适应黑白、Agy 使用 Antigravity 多色标志中的
+  绿色。Grok 继承主题前景色，因此深色主题显示白色、浅色主题显示黑色。
+- `$quota_topic` 放在额度上方，阅读顺序是 agent、当前任务、资源状态。
+- 每个窗口只发布一个样式 token。颜色按额度续航动态判断，不再使用固定
+  余额阈值：将剩余额度比例与窗口剩余时间比例比较，额度消耗不快于时间
+  进度时为绿色；落后于时间进度时为琥珀色；落后且额度低于 20% 时为
+  红色。reset 缺失或过期时使用告警色。Codex/Grok 不支持的 5h 行
+  会自动隐藏。
 - `row_gap = 1` 在 agent 卡片之间留一行空白；已有的显式 `row_gap`
   配置会原样保留。
-- `$quota_summary` 仍保留给需要紧凑布局的自定义配置。
-- `$quota_topic` 是 pane 输出中最后一次用户输入的摘要。
+- `$quota_5h`、`$quota_week`、`$quota_summary` 仍保留给需要无样式或
+  紧凑布局的自定义配置。
+
+Herdr 0.8 的样式只接受固定十六进制颜色，不支持跟随主题的语义色。
+默认的绿色、稍亮琥珀色和红色均采用中等亮度并加粗，在常见深色、浅色
+背景下都能保持区分度。
+
+Provider 品牌样式通过 Herdr 静态 `rows_by_agent` 投影实现，额度健康色继续
+使用动态 metadata。两者相互独立，也不会为静态名称额外占用 metadata token
+容量。
 
 Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 注入
 品牌 SVG/PNG。因此默认使用清晰的 provider 名称和 Herdr 原生圆点，不再

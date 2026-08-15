@@ -116,7 +116,19 @@ pub fn publish_tokens(
                 &format!("quota_summary={}", values.quota_summary),
             ]);
         set_optional_token(&mut command, "quota_5h", &values.quota_5h);
+        set_severity_token(
+            &mut command,
+            "quota_5h",
+            &values.quota_5h,
+            values.quota_5h_severity,
+        );
         set_optional_token(&mut command, "quota_week", &values.quota_week);
+        set_severity_token(
+            &mut command,
+            "quota_week",
+            &values.quota_week,
+            values.quota_week_severity,
+        );
         set_optional_token(&mut command, "quota_topic", &topic);
         if let Some(error) = &values.quota_error {
             command.args(["--token", &format!("quota_error={error}")]);
@@ -138,6 +150,28 @@ pub fn publish_tokens(
         );
     }
     Ok(())
+}
+
+fn set_severity_token(
+    command: &mut Command,
+    base: &str,
+    value: &str,
+    severity: Option<crate::model::Severity>,
+) {
+    let variants = ["normal", "warning", "danger"];
+    for variant in variants {
+        command.args(["--clear-token", &format!("{base}_{variant}")]);
+    }
+    if value.trim().is_empty() {
+        return;
+    }
+    let variant = match severity.unwrap_or(crate::model::Severity::Unknown) {
+        crate::model::Severity::Warning => "warning",
+        crate::model::Severity::Danger => "danger",
+        crate::model::Severity::Normal => "normal",
+        crate::model::Severity::Unknown => "warning",
+    };
+    command.args(["--token", &format!("{base}_{variant}={value}")]);
 }
 
 fn set_optional_token(command: &mut Command, name: &str, value: &str) {
@@ -280,6 +314,27 @@ mod tests {
         let mut panes = Vec::new();
         collect_agent_panes(&value, &mut panes);
         assert_eq!(panes[0].topic, "");
+    }
+
+    #[test]
+    fn publishes_exactly_one_styled_variant_for_each_window() {
+        let mut command = Command::new("herdr");
+        set_severity_token(
+            &mut command,
+            "quota_week",
+            "week 25% reset 2d3h",
+            Some(crate::model::Severity::Warning),
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args.contains(&"quota_week_normal".to_string()));
+        assert!(args.contains(&"quota_week_warning".to_string()));
+        assert!(args.contains(&"quota_week_danger".to_string()));
+        assert!(args.contains(&"quota_week_warning=week 25% reset 2d3h".to_string()));
+        assert!(!args.iter().any(|arg| arg.starts_with("quota_week_normal=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("quota_week_danger=")));
     }
 
     #[test]
