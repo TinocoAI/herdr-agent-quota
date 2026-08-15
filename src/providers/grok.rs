@@ -1,5 +1,5 @@
 use crate::cache::CacheStore;
-use crate::model::{Provider, ProviderSnapshot, UsageWindow, WindowKind};
+use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
 use crate::providers::ProviderError;
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -110,7 +110,7 @@ pub fn parse_billing_response(
     let reset = period
         .get("end")
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .and_then(ResetAt::parse_rfc3339);
     let window = UsageWindow::new(WindowKind::Weekly, usage, reset)
         .map_err(|error| ProviderError::UnsupportedResponse(error.to_string()))?;
     Ok(ProviderSnapshot::new(
@@ -152,6 +152,10 @@ mod tests {
                 .unwrap()
                 .remaining_percent,
             57.5
+        );
+        assert_eq!(
+            snapshot.window(WindowKind::Weekly).unwrap().resets_at,
+            Some(ResetAt::from_unix_seconds(1_787_356_800))
         );
     }
 

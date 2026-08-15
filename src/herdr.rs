@@ -1,4 +1,5 @@
-use crate::model::{MetadataTokens, Provider};
+use crate::model::Provider;
+use crate::presentation::MetadataTokens;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::process::Command;
@@ -27,11 +28,7 @@ pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
     panes.sort_by(|left, right| left.pane_id.cmp(&right.pane_id));
     panes.dedup_by(|left, right| left.pane_id == right.pane_id);
     for pane in &mut panes {
-        if should_read_topic(pane) {
-            if let Some(topic) = read_pane_topic(&executable, pane) {
-                pane.topic = topic;
-            }
-        }
+        pane.topic = read_pane_topic(&executable, pane).unwrap_or_default();
     }
     Ok(panes)
 }
@@ -58,11 +55,10 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
                     panes.push(AgentPane {
                         pane_id: pane_id.to_string(),
                         provider,
-                        topic: map
-                            .get("terminal_title_stripped")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
+                        // Native terminal titles often describe the agent's
+                        // current action (for example "Thinking"), not the
+                        // user's request. Topic text comes only from prompts.
+                        topic: String::new(),
                     });
                 }
             }
@@ -96,11 +92,7 @@ pub fn publish_tokens(
         };
         reported += 1;
         let mut command = Command::new(&executable);
-        let topic = if pane.topic.trim().is_empty() {
-            truncate_topic(&values.quota_topic)
-        } else {
-            truncate_topic(&pane.topic)
-        };
+        let topic = truncate_topic(&pane.topic);
         command
             .args([
                 "pane",
@@ -119,17 +111,13 @@ pub fn publish_tokens(
                 &format!("quota_provider={}", values.quota_provider),
             ])
             .args(["--token", &format!("quota_status={}", values.quota_status)])
-            .args(["--token", &format!("quota_5h={}", values.quota_5h)])
-            .args(["--token", &format!("quota_week={}", values.quota_week)])
             .args([
                 "--token",
                 &format!("quota_summary={}", values.quota_summary),
-            ])
-            .args(if topic.trim().is_empty() {
-                vec!["--clear-token".to_string(), "quota_topic".to_string()]
-            } else {
-                vec!["--token".to_string(), format!("quota_topic={topic}")]
-            });
+            ]);
+        set_optional_token(&mut command, "quota_5h", &values.quota_5h);
+        set_optional_token(&mut command, "quota_week", &values.quota_week);
+        set_optional_token(&mut command, "quota_topic", &topic);
         if let Some(error) = &values.quota_error {
             command.args(["--token", &format!("quota_error={error}")]);
         } else {
@@ -152,18 +140,12 @@ pub fn publish_tokens(
     Ok(())
 }
 
-fn should_read_topic(pane: &AgentPane) -> bool {
-    let title = pane.topic.trim();
-    if title.is_empty() {
-        return true;
+fn set_optional_token(command: &mut Command, name: &str, value: &str) {
+    if value.trim().is_empty() {
+        command.args(["--clear-token", name]);
+    } else {
+        command.args(["--token", &format!("{name}={value}")]);
     }
-    if matches!(pane.provider, Provider::Claude | Provider::Agy) {
-        return true;
-    }
-    matches!(
-        title.to_ascii_lowercase().as_str(),
-        "codex" | "grok" | "agy"
-    ) || !title.chars().any(char::is_whitespace)
 }
 
 fn read_pane_topic(executable: &std::ffi::OsStr, pane: &AgentPane) -> Option<String> {
@@ -185,27 +167,30 @@ fn read_pane_topic(executable: &std::ffi::OsStr, pane: &AgentPane) -> Option<Str
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    extract_topic(&text, pane.provider).or_else(|| {
-        let fallback = pane.topic.trim();
-        (!fallback.is_empty()).then(|| truncate_topic(fallback))
-    })
+    extract_topic(&text, pane.provider)
 }
 
 fn extract_topic(text: &str, provider: Provider) -> Option<String> {
     text.lines().rev().find_map(|line| {
         let cleaned_line = strip_control_chars(line);
         let line = cleaned_line.trim();
-        let candidate = match provider {
-            Provider::Claude if line.starts_with('❯') => line.trim_start_matches('❯').trim(),
-            Provider::Codex if line.starts_with('›') => line.trim_start_matches('›').trim(),
-            _ if line.starts_with('>') => line.trim_start_matches('>').trim(),
-            _ => return None,
-        };
+        let candidate = prompt_candidate(line, provider)?;
         if candidate.is_empty() || is_status_line(candidate) {
             return None;
         }
         Some(truncate_topic(candidate))
     })
+}
+
+fn prompt_candidate(line: &str, provider: Provider) -> Option<&str> {
+    let marker = match provider {
+        Provider::Claude if line.starts_with('❯') => '❯',
+        Provider::Codex if line.starts_with('›') => '›',
+        Provider::Grok if line.starts_with('❯') => '❯',
+        Provider::Grok | Provider::Agy if line.starts_with('>') => '>',
+        _ => return None,
+    };
+    Some(line.trim_start_matches(marker).trim())
 }
 
 fn truncate_topic(value: &str) -> String {
@@ -246,9 +231,12 @@ mod tests {
     #[test]
     fn discovers_canonical_agent_panes_from_nested_json() {
         let value = json!({"result": {"agents": [
-            {"pane_id": "w1:p1", "agent": "codex"},
-            {"pane_id": "w1:p2", "agent_session": {"agent": "claude"}},
+            {"pane_id": "w1:p1", "tab_id": "w1:t1", "agent": "codex"},
+            {"pane_id": "w1:p2", "tab_id": "w1:t2", "agent_session": {"agent": "claude"}},
             {"pane_id": "w1:p3", "agent": "unknown"}
+        ], "tabs": [
+            {"tab_id": "w1:t1", "label": "Owner"},
+            {"tab_id": "w1:t2", "label": "Executor"}
         ]}});
         let mut panes = Vec::new();
         collect_agent_panes(&value, &mut panes);
@@ -280,6 +268,27 @@ mod tests {
     fn extracts_latest_claude_prompt_and_skips_clear_command() {
         let text = "❯ /clear\n❯ hi\n⏺ Hi! What can I help with?\n❯\n";
         assert_eq!(extract_topic(text, Provider::Claude).as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn ignores_ai_status_title_as_a_topic() {
+        let value = json!({
+            "pane_id": "w1:p1",
+            "agent": "grok",
+            "terminal_title_stripped": "Thinking - L7 Learning Reset"
+        });
+        let mut panes = Vec::new();
+        collect_agent_panes(&value, &mut panes);
+        assert_eq!(panes[0].topic, "");
+    }
+
+    #[test]
+    fn extracts_latest_grok_user_prompt_instead_of_ai_output() {
+        let text = "❯ /goal 你在 ti 工作区接手 L7\n先读计划与权威文档，再按七步做 L7 盘点与设计。\n◇ Ran 1 subagent\n计划已读。先冻结坐标并读材料。\n";
+        assert_eq!(
+            extract_topic(text, Provider::Grok).as_deref(),
+            Some("/goal 你在 ti 工作区接手 L7")
+        );
     }
 
     #[test]

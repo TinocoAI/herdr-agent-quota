@@ -1,6 +1,7 @@
 use crate::cache::CacheStore;
 use crate::herdr::{list_agent_panes, publish_tokens};
-use crate::model::{MetadataTokens, Provider};
+use crate::model::Provider;
+use crate::presentation::MetadataTokens;
 use crate::providers::{codex, grok};
 use anyhow::Result;
 use serde::Serialize;
@@ -87,9 +88,10 @@ fn refresh_locked(
 fn publish(cache: &CacheStore, providers: &[Provider]) -> Result<()> {
     let panes = list_agent_panes().unwrap_or_default();
     let mut tokens = Vec::new();
+    let now = CacheStore::now_unix();
     for provider in providers {
         let snapshot = cache.load(*provider)?;
-        if let Some(values) = tokens_for_provider(snapshot.as_ref()) {
+        if let Some(values) = tokens_for_provider(snapshot.as_ref(), now) {
             tokens.push((*provider, values));
         }
     }
@@ -98,8 +100,9 @@ fn publish(cache: &CacheStore, providers: &[Provider]) -> Result<()> {
 
 fn tokens_for_provider(
     snapshot: Option<&crate::model::ProviderSnapshot>,
+    now_unix: u64,
 ) -> Option<MetadataTokens> {
-    snapshot.map(MetadataTokens::from_snapshot)
+    snapshot.map(|snapshot| MetadataTokens::from_snapshot(snapshot, now_unix))
 }
 
 #[cfg(test)]
@@ -123,7 +126,7 @@ mod tests {
 
     #[test]
     fn missing_snapshot_does_not_overwrite_sidebar_with_unavailable() {
-        let values = tokens_for_provider(None);
+        let values = tokens_for_provider(None, 1);
         assert!(values.is_none());
     }
 }

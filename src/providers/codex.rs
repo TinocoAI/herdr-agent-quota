@@ -1,5 +1,5 @@
 use crate::cache::CacheStore;
-use crate::model::{Provider, ProviderSnapshot, UsageWindow, WindowKind};
+use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
 use crate::providers::ProviderError;
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -32,7 +32,7 @@ pub fn parse_rate_limits(
                 .get("windowDurationMins")
                 .or_else(|| candidate.get("window_duration_mins"))
                 .and_then(Value::as_u64)?;
-            if duration < 10_000 {
+            if duration != 10_080 {
                 return None;
             }
             let used = candidate
@@ -42,8 +42,8 @@ pub fn parse_rate_limits(
             let reset = candidate
                 .get("resetsAt")
                 .or_else(|| candidate.get("resets_at"))
-                .and_then(Value::as_str)
-                .map(str::to_string);
+                .and_then(Value::as_u64)
+                .map(ResetAt::from_unix_seconds);
             Some((used, reset))
         })
         .next()
@@ -221,19 +221,14 @@ mod tests {
     fn selects_weekly_codex_window_by_duration_not_position() {
         let value = json!({
             "result": {"rateLimits": {
-                "primary": {"usedPercent": 20.0, "windowDurationMins": 300, "resetsAt": "short"},
-                "secondary": {"usedPercent": 61.0, "windowDurationMins": 10080, "resetsAt": "weekly"}
+                "primary": {"usedPercent": 20.0, "windowDurationMins": 300, "resetsAt": 1786795200},
+                "secondary": {"usedPercent": 61.0, "windowDurationMins": 10080, "resetsAt": 1787400000}
             }}
         });
         let snapshot = parse_rate_limits(&value, 1).unwrap();
-        assert_eq!(snapshot.summary(), "week 39% left");
         assert_eq!(
-            snapshot
-                .window(WindowKind::Weekly)
-                .unwrap()
-                .resets_at
-                .as_deref(),
-            Some("weekly")
+            snapshot.window(WindowKind::Weekly).unwrap().resets_at,
+            Some(ResetAt::from_unix_seconds(1_787_400_000))
         );
     }
 

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,19 +83,73 @@ impl WindowKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ResetAt(u64);
+
+impl ResetAt {
+    pub fn from_unix_seconds(seconds: u64) -> Self {
+        Self(seconds)
+    }
+
+    pub fn parse_rfc3339(value: &str) -> Option<Self> {
+        let timestamp = OffsetDateTime::parse(value, &Rfc3339)
+            .ok()?
+            .unix_timestamp();
+        u64::try_from(timestamp).ok().map(Self)
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        value
+            .parse::<u64>()
+            .ok()
+            .map(Self)
+            .or_else(|| Self::parse_rfc3339(value))
+    }
+
+    pub fn after(base_unix: u64, seconds: u64) -> Self {
+        Self(base_unix.saturating_add(seconds))
+    }
+
+    pub fn unix_seconds(self) -> u64 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ResetAt {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Unix(u64),
+            Text(String),
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Unix(value) => Ok(Self(value)),
+            Repr::Text(value) => Self::parse(&value).ok_or_else(|| {
+                serde::de::Error::custom("reset time is not Unix seconds or RFC 3339")
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageWindow {
     pub kind: WindowKind,
     pub used_percent: f64,
     pub remaining_percent: f64,
-    pub resets_at: Option<String>,
+    pub resets_at: Option<ResetAt>,
 }
 
 impl UsageWindow {
     pub fn new(
         kind: WindowKind,
         used_percent: f64,
-        resets_at: Option<String>,
+        resets_at: Option<ResetAt>,
     ) -> Result<Self, ModelError> {
         if !used_percent.is_finite() || !(0.0..=100.0).contains(&used_percent) {
             return Err(ModelError::InvalidPercentage(used_percent));
@@ -128,48 +183,6 @@ impl ProviderSnapshot {
 
     pub fn window(&self, kind: WindowKind) -> Option<&UsageWindow> {
         self.windows.iter().find(|window| window.kind == kind)
-    }
-
-    pub fn summary(&self) -> String {
-        match self.provider {
-            Provider::Codex | Provider::Grok => self
-                .window(WindowKind::Weekly)
-                .map(|window| format!("week {}% left", format_percent(window.remaining_percent)))
-                .unwrap_or_else(|| "week unavailable".to_string()),
-            Provider::Claude | Provider::Agy => {
-                let five_hour = self
-                    .window(WindowKind::FiveHour)
-                    .map(|window| format!("5h {}% left", format_percent(window.remaining_percent)))
-                    .unwrap_or_else(|| "5h unavailable".to_string());
-                let weekly = self
-                    .window(WindowKind::Weekly)
-                    .map(|window| {
-                        format!("week {}% left", format_percent(window.remaining_percent))
-                    })
-                    .unwrap_or_else(|| "week unavailable".to_string());
-                format!("{five_hour} · {weekly}")
-            }
-        }
-    }
-
-    pub fn sidebar_summary(&self) -> String {
-        match self.provider {
-            Provider::Codex | Provider::Grok => self
-                .window(WindowKind::Weekly)
-                .map(|window| format!("week {}%", format_percent(window.remaining_percent)))
-                .unwrap_or_else(|| "week N/A".to_string()),
-            Provider::Claude | Provider::Agy => {
-                let five_hour = self
-                    .window(WindowKind::FiveHour)
-                    .map(|window| format!("5h {}%", format_percent(window.remaining_percent)))
-                    .unwrap_or_else(|| "5h N/A".to_string());
-                let weekly = self
-                    .window(WindowKind::Weekly)
-                    .map(|window| format!("week {}%", format_percent(window.remaining_percent)))
-                    .unwrap_or_else(|| "week N/A".to_string());
-                format!("{five_hour} · {weekly}")
-            }
-        }
     }
 
     pub fn severity(&self) -> Severity {
@@ -223,68 +236,6 @@ impl Severity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MetadataTokens {
-    pub quota_badge: String,
-    pub quota_state: String,
-    pub quota_icon: String,
-    pub quota_provider: String,
-    pub quota_status: String,
-    pub quota_5h: String,
-    pub quota_week: String,
-    pub quota_summary: String,
-    pub quota_topic: String,
-    pub quota_error: Option<String>,
-}
-
-impl MetadataTokens {
-    pub fn from_snapshot(snapshot: &ProviderSnapshot) -> Self {
-        Self {
-            quota_badge: snapshot.provider.badge().to_string(),
-            quota_state: snapshot.severity().symbol().to_string(),
-            quota_icon: snapshot.provider.icon().to_string(),
-            quota_provider: snapshot.provider.display_name().to_string(),
-            quota_status: snapshot.severity().label().to_string(),
-            quota_5h: sidebar_window(snapshot, WindowKind::FiveHour),
-            quota_week: sidebar_window(snapshot, WindowKind::Weekly),
-            quota_summary: snapshot.sidebar_summary(),
-            quota_topic: String::new(),
-            quota_error: None,
-        }
-    }
-
-    pub fn unavailable(provider: Provider, reason: impl Into<String>) -> Self {
-        Self {
-            quota_badge: provider.badge().to_string(),
-            quota_state: Severity::Unknown.symbol().to_string(),
-            quota_icon: provider.icon().to_string(),
-            quota_provider: provider.display_name().to_string(),
-            quota_status: Severity::Unknown.label().to_string(),
-            quota_5h: match provider {
-                Provider::Claude | Provider::Agy => "5h N/A".to_string(),
-                Provider::Codex | Provider::Grok => String::new(),
-            },
-            quota_week: "week N/A".to_string(),
-            quota_summary: "unavailable".to_string(),
-            quota_topic: String::new(),
-            quota_error: Some(reason.into().chars().take(80).collect()),
-        }
-    }
-}
-
-fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind) -> String {
-    snapshot
-        .window(kind)
-        .map(|window| {
-            format!(
-                "{} {}%",
-                kind.label(),
-                format_percent(window.remaining_percent)
-            )
-        })
-        .unwrap_or_default()
-}
-
 pub fn format_percent(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{}", value as u64)
@@ -316,40 +267,20 @@ mod tests {
     }
 
     #[test]
+    fn reset_time_deserializes_new_unix_and_legacy_rfc3339_cache_values() {
+        let unix: ResetAt = serde_json::from_str("1787400000").unwrap();
+        let legacy: ResetAt = serde_json::from_str("\"2026-08-22T12:00:00Z\"").unwrap();
+        assert_eq!(unix, ResetAt::from_unix_seconds(1_787_400_000));
+        assert_eq!(legacy, unix);
+        assert_eq!(serde_json::to_string(&unix).unwrap(), "1787400000");
+    }
+
+    #[test]
     fn severity_uses_remaining_percentage_boundaries() {
         assert_eq!(Severity::from_remaining(30.01), Severity::Normal);
         assert_eq!(Severity::from_remaining(30.0), Severity::Warning);
         assert_eq!(Severity::from_remaining(10.0), Severity::Warning);
         assert_eq!(Severity::from_remaining(9.99), Severity::Danger);
-    }
-
-    #[test]
-    fn claude_summary_contains_both_windows_and_no_timestamp() {
-        let snapshot = ProviderSnapshot::new(
-            Provider::Claude,
-            vec![
-                window(WindowKind::FiveHour, 58.0),
-                window(WindowKind::Weekly, 27.0),
-            ],
-            1,
-        );
-        assert_eq!(snapshot.summary(), "5h 42% left · week 73% left");
-        assert!(!snapshot.summary().contains("2026"));
-    }
-
-    #[test]
-    fn sidebar_tokens_put_five_hour_before_weekly_value() {
-        let snapshot = ProviderSnapshot::new(
-            Provider::Claude,
-            vec![
-                window(WindowKind::FiveHour, 58.0),
-                window(WindowKind::Weekly, 27.0),
-            ],
-            1,
-        );
-        let tokens = MetadataTokens::from_snapshot(&snapshot);
-        assert_eq!(tokens.quota_5h, "5h 42%");
-        assert_eq!(tokens.quota_week, "week 73%");
     }
 
     #[test]
@@ -359,11 +290,5 @@ mod tests {
         assert_eq!(Provider::Grok.badge(), "[X]");
         assert_eq!(Provider::Codex.icon(), "◈C");
         assert_eq!(Provider::Claude.icon(), "✦Cl");
-    }
-
-    #[test]
-    fn unavailable_error_fits_herdr_token_limit() {
-        let values = MetadataTokens::unavailable(Provider::Grok, "x".repeat(120));
-        assert_eq!(values.quota_error.as_deref().unwrap().len(), 80);
     }
 }

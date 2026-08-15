@@ -1,5 +1,5 @@
 use crate::cache::CacheStore;
-use crate::model::{Provider, ProviderSnapshot, UsageWindow, WindowKind};
+use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
 use crate::providers::ProviderError;
 use serde_json::Value;
 
@@ -24,7 +24,7 @@ pub fn parse_statusline(
         (WindowKind::FiveHour, &FIVE_HOUR_KEYS[..]),
         (WindowKind::Weekly, &WEEKLY_KEYS[..]),
     ] {
-        if let Some(window) = parse_window(quota, kind, keys)? {
+        if let Some(window) = parse_window(quota, kind, keys, fetched_at_unix)? {
             windows.push(window);
         }
     }
@@ -44,6 +44,7 @@ fn parse_window(
     quota: &serde_json::Map<String, Value>,
     kind: WindowKind,
     keys: &[&str],
+    fetched_at_unix: u64,
 ) -> std::result::Result<Option<UsageWindow>, ProviderError> {
     let mut lowest_remaining: Option<f64> = None;
     let mut reset = None;
@@ -56,11 +57,7 @@ fn parse_window(
         };
         if lowest_remaining.is_none_or(|current| remaining < current) {
             lowest_remaining = Some(remaining);
-            reset = bucket
-                .get("reset_time")
-                .or_else(|| bucket.get("resetTime"))
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            reset = parse_reset(bucket, fetched_at_unix);
         }
     }
     let Some(remaining) = lowest_remaining else {
@@ -70,6 +67,21 @@ fn parse_window(
     UsageWindow::new(kind, used, reset)
         .map(Some)
         .map_err(|error| ProviderError::UnsupportedResponse(error.to_string()))
+}
+
+fn parse_reset(value: &Value, fetched_at_unix: u64) -> Option<ResetAt> {
+    value
+        .get("reset_time")
+        .or_else(|| value.get("resetTime"))
+        .and_then(Value::as_str)
+        .and_then(ResetAt::parse_rfc3339)
+        .or_else(|| {
+            value
+                .get("reset_in_seconds")
+                .or_else(|| value.get("resetInSeconds"))
+                .and_then(Value::as_u64)
+                .map(|seconds| ResetAt::after(fetched_at_unix, seconds))
+        })
 }
 
 fn parse_remaining(value: &Value) -> Option<f64> {
@@ -103,22 +115,17 @@ mod tests {
     fn parses_both_agy_windows_from_official_quota_keys() {
         let value = json!({
             "quota": {
-                "gemini-5h": {"remaining_fraction": 0.9969, "reset_time": "short"},
-                "gemini-weekly": {"remaining_fraction": 0.8, "reset_time": "week"},
-                "3p-5h": {"remaining_fraction": 0.72, "reset_time": "short-low"},
+                "gemini-5h": {"remaining_fraction": 0.9969, "reset_time": "2026-08-15T12:00:00Z"},
+                "gemini-weekly": {"remaining_fraction": 0.8, "reset_time": "2026-08-22T12:00:00Z"},
+                "3p-5h": {"remaining_fraction": 0.72, "reset_time": "2026-08-15T13:00:00Z"},
                 "3p-weekly": {"remaining_fraction": 0.91}
             }
         });
         let snapshot = parse_statusline(&value, 1).unwrap();
         assert_eq!(snapshot.provider, Provider::Agy);
-        assert_eq!(snapshot.summary(), "5h 72% left · week 80% left");
         assert_eq!(
-            snapshot
-                .window(WindowKind::FiveHour)
-                .unwrap()
-                .resets_at
-                .as_deref(),
-            Some("short-low")
+            snapshot.window(WindowKind::FiveHour).unwrap().resets_at,
+            Some(ResetAt::from_unix_seconds(1_786_798_800))
         );
     }
 
@@ -128,7 +135,22 @@ mod tests {
             "quota": {"gemini-weekly": {"remaining_fraction": 0.61}}
         });
         let snapshot = parse_statusline(&value, 1).unwrap();
-        assert_eq!(snapshot.summary(), "5h unavailable · week 61% left");
+        assert!(snapshot.window(WindowKind::FiveHour).is_none());
+    }
+
+    #[test]
+    fn derives_absolute_agy_reset_from_relative_seconds() {
+        let value = json!({
+            "quota": {"gemini-5h": {
+                "remaining_fraction": 0.5,
+                "reset_in_seconds": 900
+            }}
+        });
+        let snapshot = parse_statusline(&value, 1_000).unwrap();
+        assert_eq!(
+            snapshot.window(WindowKind::FiveHour).unwrap().resets_at,
+            Some(ResetAt::from_unix_seconds(1_900))
+        );
     }
 
     #[test]

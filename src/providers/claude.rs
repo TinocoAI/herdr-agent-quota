@@ -1,5 +1,5 @@
 use crate::cache::CacheStore;
-use crate::model::{Provider, ProviderSnapshot, UsageWindow, WindowKind};
+use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
 use crate::providers::ProviderError;
 use serde_json::Value;
 
@@ -45,10 +45,12 @@ fn parse_window(
         .ok_or_else(|| {
             ProviderError::UnsupportedResponse(format!("missing {} usage", kind.label()))
         })?;
-    let reset = value
-        .get("resets_at")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let reset = value.get("resets_at").and_then(|value| {
+        value
+            .as_u64()
+            .map(ResetAt::from_unix_seconds)
+            .or_else(|| value.as_str().and_then(ResetAt::parse))
+    });
     UsageWindow::new(kind, used, reset)
         .map(Some)
         .map_err(|error| ProviderError::UnsupportedResponse(error.to_string()))
@@ -70,12 +72,32 @@ mod tests {
     fn parses_claude_five_hour_and_weekly_limits() {
         let value = json!({
             "rate_limits": {
-                "five_hour": {"used_percentage": 58.0, "resets_at": "2026-08-15T12:00:00Z"},
-                "seven_day": {"used_percentage": 27.0, "resets_at": "2026-08-22T12:00:00Z"}
+                "five_hour": {"used_percentage": 58.0, "resets_at": 1786795200},
+                "seven_day": {"used_percentage": 27.0, "resets_at": 1787400000}
             }
         });
         let snapshot = parse_statusline(&value, 1).unwrap();
-        assert_eq!(snapshot.summary(), "5h 42% left · week 73% left");
+        assert_eq!(
+            snapshot.window(WindowKind::FiveHour).unwrap().resets_at,
+            Some(ResetAt::from_unix_seconds(1_786_795_200))
+        );
+    }
+
+    #[test]
+    fn parses_rfc3339_reset_emitted_by_claude_statusline() {
+        let value = json!({
+            "rate_limits": {
+                "five_hour": {
+                    "used_percentage": 57.0,
+                    "resets_at": "2026-08-15T12:00:00Z"
+                }
+            }
+        });
+        let snapshot = parse_statusline(&value, 1).unwrap();
+        assert_eq!(
+            snapshot.window(WindowKind::FiveHour).unwrap().resets_at,
+            Some(ResetAt::from_unix_seconds(1_786_795_200))
+        );
     }
 
     #[test]

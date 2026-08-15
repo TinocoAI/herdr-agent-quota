@@ -13,14 +13,19 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 
 ```text
 ● Owner · Claude
-  5h 100% · week 31%     ← 剩余百分比，不是 token 数
+  5h    100%  reset 3h07m
+  week   31%  reset 2d3h
   hi                     ← 这个 pane 当前在做什么
 ```
 
 ![Herdr 左侧额度截图](docs/screenshots/herdr-sidebar-live.png)
 
-- **四个 CLI，各占一行** —— Claude Code、Codex、Grok、Agy/Antigravity。
-- **每个 pane 三行** —— provider、剩余用量、当前话题。
+*真实的 Herdr 工作区：Claude 分行显示 5 小时和周额度及其重置倒计时，
+Codex、Grok 显示周额度；每张 agent 卡片最后一行来自用户最后一次输入，
+不会使用 AI 生成的状态标题。*
+
+- **四个 CLI，一个侧栏** —— Claude Code、Codex、Grok、Agy/Antigravity。
+- **每个 pane 三或四行** —— provider、每个额度窗口各一行、最后一条用户输入。
 - **全本地** —— 不上传任何用量数据，不读浏览器 cookie 和系统钥匙串，
   也不会写入或刷新凭证。
 - **不会给你错的数** —— 刷新失败时保留上一次的有效数值，而不是闪成
@@ -52,7 +57,7 @@ herdr server reload-config
 以上就是完整的 Herdr 配置流程：
 
 - `herdr plugin link .` 构建 Rust 二进制并注册启动/事件钩子。
-- `configure --apply` 幂等地写入三行 sidebar 配置，并安装可恢复的
+- `configure --apply` 幂等地写入按额度窗口分行的 sidebar 配置，并安装可恢复的
   Claude Code `statusLine` 包装器。
 - 也可以在 Herdr action 菜单中执行 **Configure agent quota sidebar**。
 - 需要手动刷新时执行 **Refresh agent quota**。
@@ -72,7 +77,7 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。执行
 
 | CLI | 侧栏显示 | 本地数据来源 | 额外配置 |
 | --- | --- | --- | --- |
-| Claude Code `2.1.232` | `5h` + `week` | 官方 `statusLine` JSON：`rate_limits.five_hour`、`seven_day` | `configure --apply` 会串联已有 `statusLine` 命令 |
+| Claude Code `2.1.233` | `5h` + `week` | 官方 `statusLine` JSON：`rate_limits.five_hour`、`seven_day` | `configure --apply` 会串联已有 `statusLine` 命令 |
 | OpenAI Codex `0.147.0` | `week` | 一次性的 `codex app-server --stdio`，调用 `account/rateLimits/read` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用 |
 | Grok CLI / Grok Build `1.0.3` | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 登录 Grok CLI；不会读取 xAI team/API 账单 |
 | Agy / Antigravity CLI `1.1.13` | `5h` + `week` | 官方 `statusLine` JSON 的 `quota`（`gemini-*`、`3p-*`） | 需要一次性设置原生 `/statusline` 命令 |
@@ -80,15 +85,18 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。执行
 上面的版本是 2026-08-15 在开发机上实际检查的版本。解析器按照供应商的
 字段工作，不会把这些版本号写死；兼容的新版本可以继续使用。
 
-侧栏显示的是**剩余百分比**，不是 token 数量，也不显示重置时间：
+侧栏显示的是**剩余百分比**和距离下次重置的时间，不是 token 数量：
 
 ```text
 ● Owner · Claude
-  5h 100% · week 31%
+  5h    100%  reset 3h07m
+  week   31%  reset 2d3h
   hi
 ```
 
 Codex 和 Grok 提供周额度；Claude Code 和 Agy 提供 5 小时额度与周额度。
+不到一小时显示分钟，不到一天显示小时和分钟，超过一天显示天和小时。
+侧栏数值在 agent 事件或手动刷新时重新计算，不是常驻的逐分钟跳动倒计时。
 刷新失败时，插件会保留上一次成功的缓存值，不会把旧值清空为
 `unavailable`。从未成功采集过的 provider 才会显示 `N/A`。
 
@@ -110,25 +118,32 @@ Agy 通过原生的一次性 `statusLine` hook 把额度 JSON 传给插件。在
 
 ```toml
 [ui.sidebar.agents]
+row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", "$quota_provider"],
-  ["$quota_summary"],
+  ["$quota_5h"],
+  ["$quota_week"],
   ["$quota_topic"],
 ]
 ```
 
 - `state_icon`、`tab` 是 Herdr 内置的状态和 plane 标签。
 - `$quota_provider` 是 `Claude`、`Codex`、`Grok` 或 `Agy`。
-- `$quota_summary` 是 `5h ... · week ...` 或 `week ...`。
-- `$quota_topic` 是 pane 输出中最近一次用户输入/话题的摘要。
+- `$quota_5h`、`$quota_week` 让每个额度窗口各占一行；Codex 和 Grok
+  没有 5h token 时，Herdr 会自动隐藏该行。
+- `row_gap = 1` 在 agent 卡片之间留一行空白；已有的显式 `row_gap`
+  配置会原样保留。
+- `$quota_summary` 仍保留给需要紧凑布局的自定义配置。
+- `$quota_topic` 是 pane 输出中最后一次用户输入的摘要。
 
 Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 注入
 品牌 SVG/PNG。因此默认使用清晰的 provider 名称和 Herdr 原生圆点，不再
 添加辨识度不高的 Unicode 图标。仓库中的 [`docs/icons/`](docs/icons/) 只
 作为可选视觉参考，不会被注入左侧原生 sidebar。
 
-话题读取由事件触发：插件扫描 pane 最近输出，优先提取最新用户输入；如果
-CLI 还没有打印 prompt，则回退到原生终端标题。不会显示工作目录。
+话题读取由事件触发：插件扫描 pane 最近输出，只提取最后一次用户输入。
+如果没有找到 prompt，话题保持空白，不会回退为 AI 生成的 `Thinking`、
+`Executing` 等终端标题，也不会显示工作目录。
 
 ## 数据来源与隐私
 

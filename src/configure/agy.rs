@@ -1,6 +1,7 @@
 use crate::cache::CacheStore;
 use crate::herdr::{list_agent_panes, publish_tokens};
-use crate::model::{MetadataTokens, Provider};
+use crate::model::Provider;
+use crate::presentation::{dashboard_summary, MetadataTokens};
 use crate::providers::agy::run_statusline;
 use anyhow::Result;
 use std::io::Read;
@@ -19,8 +20,9 @@ pub fn run_statusline_hook() -> Result<()> {
     let cache = CacheStore::from_env()?;
     cache.save(&snapshot)?;
     let panes = list_agent_panes().unwrap_or_default();
-    let tokens = [(Provider::Agy, MetadataTokens::from_snapshot(&snapshot))];
+    let now = CacheStore::now_unix();
+    let tokens = [(Provider::Agy, MetadataTokens::from_snapshot(&snapshot, now))];
     let _ = publish_tokens(&panes, &tokens, CacheStore::now_millis());
-    println!("Agy | {}", snapshot.summary());
+    println!("Agy | {}", dashboard_summary(&snapshot, now));
     Ok(())
 }
