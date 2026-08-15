@@ -34,6 +34,11 @@ pub fn apply() -> Result<()> {
     if is_installed(settings.get("statusLine")) {
         return Ok(());
     }
+    if !can_chain_statusline(settings.get("statusLine")) {
+        anyhow::bail!(
+            "existing Claude statusLine has no safely chainable command; refusing to replace it"
+        );
+    }
     let cache = CacheStore::from_env()?;
     cache.ensure()?;
     let backup = cache.root().join(BACKUP_FILE);
@@ -126,8 +131,22 @@ pub fn run_statusline_hook() -> Result<()> {
         let output = child.wait_with_output()?;
         std::io::stdout().write_all(&output.stdout)?;
         std::io::stdout().flush()?;
+        if !output.status.success() {
+            std::process::exit(output.status.code().unwrap_or(1));
+        }
     }
     Ok(())
+}
+
+fn can_chain_statusline(status_line: Option<&Value>) -> bool {
+    match status_line {
+        None | Some(Value::Null) | Some(Value::String(_)) => true,
+        Some(Value::Object(map)) => map
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| !command.trim().is_empty()),
+        Some(_) => false,
+    }
 }
 
 fn previous_statusline_command() -> Result<Option<String>> {
@@ -236,5 +255,16 @@ mod tests {
         write_settings(&path, &settings).unwrap();
         let saved = read_settings(&path).unwrap();
         assert_eq!(saved["statusLine"]["refreshInterval"], 5);
+    }
+
+    #[test]
+    fn refuses_statusline_shapes_that_cannot_be_chained() {
+        assert!(can_chain_statusline(Some(&json!("echo old"))));
+        assert!(can_chain_statusline(Some(&json!({
+            "type": "command",
+            "command": "echo old"
+        }))));
+        assert!(!can_chain_statusline(Some(&json!({"type": "prompt"}))));
+        assert!(!can_chain_statusline(Some(&json!(["echo old"]))));
     }
 }
