@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/levi-qiao/herdr-agent-quota?style=social)](https://github.com/levi-qiao/herdr-agent-quota)
 
+中文文档：[README.zh-CN.md](README.zh-CN.md)
+
 Live Claude Code, Codex, Grok, and Agy/Antigravity subscription quotas in
 Herdr's agent sidebar. See the provider once, the remaining usage on the next
 line, and the current CLI topic below it.
