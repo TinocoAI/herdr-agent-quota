@@ -13,16 +13,16 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 
 ```text
 ● Owner · Claude
-  5h    100%  reset 3h07m
-  week   31%  reset 2d3h
   hi                     ← what that pane is actually working on
+  5h 100% reset 3h07m
+  week 31% reset 2d3h
 ```
 
 ![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
 *A real Herdr workspace: Claude shows separate five-hour and weekly reset
-ETAs, Codex and Grok show their weekly windows, and the final line of each
-agent card is the latest user prompt rather than an AI-generated status.*
+ETAs, Codex and Grok show their weekly windows, and each agent card uses the
+latest user prompt rather than an AI-generated status.*
 
 - **Four CLIs, one sidebar** — Claude Code, Codex, Grok, Agy/Antigravity.
 - **Three or four lines per pane** — provider, one line per quota window, and
@@ -45,6 +45,30 @@ herdr server reload-config
 
 The screenshot is a real local Herdr session. The values and topic text are
 examples from that session; they are not hard-coded in the plugin.
+
+### Time-aware quota health
+
+Quota colors answer “will this allowance last until reset?” instead of applying
+a fixed percentage threshold. For each available 5-hour or 7-day window, the
+plugin computes:
+
+```text
+time_left  = (reset_at - now) / window_duration
+quota_left = remaining_percent / 100
+health     = quota_left / time_left
+```
+
+- **Green** — `health >= 1`: quota is being consumed no faster than time.
+- **Amber** — `health < 1`: current usage is ahead of the sustainable pace.
+- **Red** — `health < 1` and less than 20% quota remains: exhaustion risk is
+  both immediate and material.
+- **Amber fallback** — reset data is missing or expired, so the plugin avoids
+  claiming that the quota is safe.
+
+This explains the screenshot: Claude's weekly 24% is green because only about
+13% of the week remains, while Grok's weekly 20% is amber because about 69% of
+its window remains. The calculation is shared by every provider adapter; only
+the window data differs.
 
 ## Quick start
 
@@ -120,21 +144,44 @@ once:
 [ui.sidebar.agents]
 row_gap = 1 # herdr-agent-quota
 rows = [
-  ["state_icon", "tab", "$quota_provider"],
-  ["$quota_5h"],
-  ["$quota_week"],
-  ["$quota_topic"],
+  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
+  [{ token = "$quota_topic", dim = false }],
+  [{ token = "$quota_5h_normal", fg = "#2e8b57", bold = true, dim = false }],
+  [{ token = "$quota_5h_warning", fg = "#c47f00", bold = true, dim = false }],
+  [{ token = "$quota_5h_danger", fg = "#d14343", bold = true, dim = false }],
+  [{ token = "$quota_week_normal", fg = "#2e8b57", bold = true, dim = false }],
+  [{ token = "$quota_week_warning", fg = "#c47f00", bold = true, dim = false }],
+  [{ token = "$quota_week_danger", fg = "#d14343", bold = true, dim = false }],
 ]
 ```
 
 - `state_icon` and `tab` are Herdr's built-in status and plane labels.
 - `$quota_provider` is `Claude`, `Codex`, `Grok`, or `Agy`.
-- `$quota_5h` and `$quota_week` put each available quota window on its own row;
-  Herdr hides the absent 5h row for Codex and Grok.
+- Default provider labels use recognizable brand colors without affecting quota
+  health: Claude coral-orange, Codex blue, adaptive monochrome for Grok, and a
+  green from Antigravity's multicolor palette for Agy. Grok inherits the theme
+  foreground, so it is white on dark themes and black on light themes.
+- `$quota_topic` comes before the quota rows so the card reads as agent, task,
+  then resource status.
+- Each window publishes exactly one styled variant. Color follows runway rather
+  than a fixed quota threshold: remaining quota is compared with the percentage
+  of window time still left. At or ahead of pace is green; behind pace is
+  amber; behind pace with less than 20% quota remaining is red. Missing or
+  expired reset data uses the warning color. Herdr hides all absent variants,
+  including the unsupported 5h row for Codex/Grok.
 - `row_gap = 1` adds one blank row between agent cards. An existing explicit
   `row_gap` value is preserved.
-- `$quota_summary` remains available for custom compact layouts.
-- `$quota_topic` is the latest user prompt found in the pane output.
+- `$quota_5h`, `$quota_week`, and `$quota_summary` remain available for custom
+  unstyled layouts.
+
+Herdr 0.8 only accepts fixed hex colors for styled tokens, not semantic theme
+colors. The green, slightly brighter amber, and red defaults use medium tones
+and bold text so they remain distinguishable on common dark and light
+backgrounds.
+
+Provider styling uses Herdr's static `rows_by_agent` projection, while quota
+health remains dynamic metadata. This keeps branding and health logic separate
+and avoids spending additional metadata-token capacity on static labels.
 
 Herdr plugin v1 accepts text tokens, not provider image components. For that
 reason the default layout uses the readable provider name and keeps Herdr's

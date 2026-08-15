@@ -125,8 +125,8 @@ ResetAt(i64)                 # Unix 秒，统一绝对时间
 推荐最终一行保持紧凑：
 
 ```text
-5h 42% │ reset 3h07m
-week 73% │ reset 2d3h
+5h 42% reset 3h07m
+week 73% reset 2d3h
 ```
 
 “有 d 就只显示 dh”会牺牲分钟精度，但符合窄 sidebar。dashboard 也应复用同一 formatter；如果未来真的需要完整本地时刻，再为 dashboard 扩展展示层，不让 provider parser 负责本地化。

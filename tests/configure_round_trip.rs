@@ -18,13 +18,25 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
         "rows = [[\"state_icon\", \"workspace\", \"tab\"], [\"agent\"]]\n"
     );
     let applied = add_quota_row(original).unwrap();
-    assert!(applied.contains("[\"state_icon\", \"tab\", \"$quota_provider\"]"));
-    assert!(applied.contains("[\"$quota_5h\"]"));
-    assert!(applied.contains("[\"$quota_week\"]"));
+    assert!(applied.contains("$quota_provider"));
+    assert!(applied.contains("bold = true"));
+    assert!(applied.contains("$quota_5h_normal"));
+    assert!(applied.contains("$quota_5h_warning"));
+    assert!(applied.contains("$quota_5h_danger"));
+    assert!(applied.contains("$quota_week_normal"));
+    assert!(applied.contains("$quota_week_warning"));
+    assert!(applied.contains("$quota_week_danger"));
     assert!(!applied.contains("[\"$quota_summary\"]"));
-    assert!(applied.contains("[\"$quota_topic\"]"));
+    assert!(applied.contains("$quota_topic"));
     assert!(applied.contains("row_gap = 1 # herdr-agent-quota"));
-    assert_eq!(applied.matches("[\"").count(), 4);
+    assert!(applied.find("$quota_topic").unwrap() < applied.find("$quota_5h_normal").unwrap());
+    assert!(applied.contains("fg = \"#2e8b57\""));
+    assert!(applied.contains("fg = \"#c47f00\""));
+    assert!(applied.contains("fg = \"#d14343\""));
+    assert!(applied.contains("[ui.sidebar.agents.rows_by_agent]"));
+    assert!(applied.contains("fg = \"#d97757\""));
+    assert!(applied.contains("fg = \"#53b8e8\""));
+    assert!(applied.contains("fg = \"#00b95c\""));
 }
 
 #[test]

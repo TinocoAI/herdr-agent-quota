@@ -43,8 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Five-hour and weekly quota windows now occupy separate sidebar rows. Missing
   five-hour tokens are cleared so Herdr elides that row for Codex and Grok.
 - Sidebar agent cards default to one blank row of separation, while preserving
-  an existing `row_gap`. Quota rows align their window, percentage, and reset
-  columns without adding a heavy vertical divider.
+  an existing `row_gap`. The latest user prompt now precedes compact,
+  single-spaced quota rows, and percentages render as whole numbers.
+- Default sidebar styling compares quota remaining with window time remaining:
+  on-pace usage is bold green, behind-pace usage is brighter amber, and
+  behind-pace usage below 20% remaining is bold red.
+- Provider labels now use separate brand-aware `rows_by_agent` styling: Claude
+  coral-orange, Codex blue, theme-adaptive monochrome for Grok, and Antigravity
+  green for Agy. Existing user-owned agent row overrides remain untouched.
 
 - Dropped the unmaintained `fs2` dependency in favour of the standard library's
   file locking, and made `libc` a Unix-only dependency.

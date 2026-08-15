@@ -68,7 +68,7 @@ pub fn render_provider(
         Some(snapshot) => format!(
             "{} {}\r\n  {}",
             provider.display_name(),
-            snapshot.severity().label(),
+            snapshot.severity(now_unix).label(),
             dashboard_summary(snapshot, now_unix)
         ),
         None => format!("{} N/A\r\n  unavailable", provider.display_name()),
@@ -104,7 +104,7 @@ mod tests {
         let rendered = render_provider(Provider::Claude, Some(&snapshot), 0);
         assert_eq!(
             rendered,
-            "Claude OK\r\n  5h 42% left │ reset 4h07m · week 73% left │ reset 2d3h"
+            "Claude WARN\r\n  5h 42% left reset 4h07m · week 73% left reset 2d3h"
         );
     }
 

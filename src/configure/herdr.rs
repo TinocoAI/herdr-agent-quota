@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
-use toml_edit::{Array, DocumentMut, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 10] = [
+const QUOTA_ROW_MARKERS: [&str; 18] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
@@ -14,8 +14,23 @@ const QUOTA_ROW_MARKERS: [&str; 10] = [
     "$quota_5h",
     "$quota_week",
     "$quota_header",
+    "$quota_5h_normal",
+    "$quota_5h_warning",
+    "$quota_5h_danger",
+    "$quota_5h_unknown",
+    "$quota_week_normal",
+    "$quota_week_warning",
+    "$quota_week_danger",
+    "$quota_week_unknown",
 ];
 const ROW_GAP_MARKER: &str = "herdr-agent-quota";
+const PROVIDER_STYLE_MARKER: &str = "herdr-agent-quota-provider";
+const PROVIDER_STYLES: [(&str, Option<&str>); 4] = [
+    ("claude", Some("#d97757")),
+    ("codex", Some("#53b8e8")),
+    ("grok", None),
+    ("agy", Some("#00b95c")),
+];
 
 pub fn check() -> Result<()> {
     let path = config_path()?;
@@ -125,6 +140,8 @@ pub fn add_quota_row(input: &str) -> Result<String> {
     }
     append_quota_rows(&mut updated_rows);
     *rows = updated_rows;
+    let rows = rows.clone();
+    add_provider_rows(agents, &rows)?;
     Ok(document.to_string())
 }
 
@@ -145,25 +162,25 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
     else {
         return Ok(input.to_string());
     };
-    let Some(rows) = agents.get_mut("rows").and_then(Item::as_array_mut) else {
-        return Ok(input.to_string());
-    };
-    let mut retained = Array::new();
-    for row in rows.iter() {
-        let cleaned = strip_quota_tokens(row);
-        if cleaned.len() == 1
-            && matches!(
-                cleaned.iter().next().and_then(Value::as_str),
-                Some("terminal_title_stripped") | Some("$quota_topic")
-            )
-        {
-            continue;
+    remove_managed_provider_rows(agents);
+    if let Some(rows) = agents.get_mut("rows").and_then(Item::as_array_mut) {
+        let mut retained = Array::new();
+        for row in rows.iter() {
+            let cleaned = strip_quota_tokens(row);
+            if cleaned.len() == 1
+                && matches!(
+                    cleaned.iter().next().and_then(Value::as_str),
+                    Some("terminal_title_stripped") | Some("$quota_topic")
+                )
+            {
+                continue;
+            }
+            if !cleaned.is_empty() {
+                retained.push(Value::Array(cleaned));
+            }
         }
-        if !cleaned.is_empty() {
-            retained.push(Value::Array(cleaned));
-        }
+        agents["rows"] = Item::Value(Value::Array(retained));
     }
-    agents["rows"] = Item::Value(Value::Array(retained));
     let managed_row_gap = agents
         .get("row_gap")
         .and_then(Item::as_value)
@@ -192,15 +209,92 @@ fn strip_quota_tokens(row: &Value) -> Array {
     let mut cleaned = Array::new();
     if let Some(items) = row.as_array() {
         for item in items {
-            let is_quota_token = item
-                .as_str()
-                .is_some_and(|value| QUOTA_ROW_MARKERS.contains(&value));
+            let is_quota_token =
+                configured_token_name(item).is_some_and(|value| QUOTA_ROW_MARKERS.contains(&value));
             if !is_quota_token {
                 cleaned.push(item.clone());
             }
         }
     }
     cleaned
+}
+
+fn configured_token_name(value: &Value) -> Option<&str> {
+    value.as_str().or_else(|| {
+        value
+            .as_inline_table()
+            .and_then(|table| table.get("token"))
+            .and_then(Value::as_str)
+    })
+}
+
+fn add_provider_rows(agents: &mut Table, rows: &Array) -> Result<()> {
+    let rows_by_agent = agents
+        .entry("rows_by_agent")
+        .or_insert(Item::Table(Table::new()))
+        .as_table_mut()
+        .context("Herdr ui.sidebar.agents.rows_by_agent must be a table")?;
+
+    for (provider, color) in PROVIDER_STYLES {
+        let is_managed = rows_by_agent
+            .get(provider)
+            .and_then(Item::as_value)
+            .is_some_and(has_provider_style_marker);
+        if rows_by_agent.contains_key(provider) && !is_managed {
+            continue;
+        }
+        let mut value = Value::Array(provider_rows(rows, color));
+        value
+            .decor_mut()
+            .set_suffix(format!(" # {PROVIDER_STYLE_MARKER}"));
+        rows_by_agent.insert(provider, Item::Value(value));
+    }
+    Ok(())
+}
+
+fn provider_rows(rows: &Array, color: Option<&str>) -> Array {
+    let mut themed = Array::new();
+    for row in rows.iter() {
+        let Some(items) = row.as_array() else {
+            continue;
+        };
+        let mut themed_row = Array::new();
+        for item in items {
+            if configured_token_name(item) == Some("$quota_provider") {
+                themed_row.push(styled_token("agent", color, Some(true), Some(false)));
+            } else {
+                themed_row.push(item.clone());
+            }
+        }
+        themed.push(Value::Array(themed_row));
+    }
+    themed
+}
+
+fn remove_managed_provider_rows(agents: &mut Table) {
+    let Some(rows_by_agent) = agents.get_mut("rows_by_agent").and_then(Item::as_table_mut) else {
+        return;
+    };
+    for (provider, _) in PROVIDER_STYLES {
+        let is_managed = rows_by_agent
+            .get(provider)
+            .and_then(Item::as_value)
+            .is_some_and(has_provider_style_marker);
+        if is_managed {
+            rows_by_agent.remove(provider);
+        }
+    }
+    if rows_by_agent.is_empty() {
+        agents.remove("rows_by_agent");
+    }
+}
+
+fn has_provider_style_marker(value: &Value) -> bool {
+    value
+        .decor()
+        .suffix()
+        .and_then(|suffix| suffix.as_str())
+        .is_some_and(|suffix| suffix.contains(PROVIDER_STYLE_MARKER))
 }
 
 fn default_state_row() -> Array {
@@ -282,31 +376,71 @@ fn append_quota_rows(rows: &mut Array) {
 
     if let Some(index) = official_index {
         if let Some(row) = rows.get_mut(index).and_then(Value::as_array_mut) {
-            if !row
-                .iter()
-                .any(|item| item.as_str() == Some("$quota_provider"))
-            {
-                row.push("$quota_provider");
-            }
+            row.push(styled_token(
+                "$quota_provider",
+                None,
+                Some(true),
+                Some(false),
+            ));
         }
     }
 
-    let mut five_hour_row = Array::new();
-    five_hour_row.push("$quota_5h");
-    rows.push(Value::Array(five_hour_row));
+    rows.push(Value::Array(styled_row(
+        "$quota_topic",
+        None,
+        None,
+        Some(false),
+    )));
 
-    let mut weekly_row = Array::new();
-    weekly_row.push("$quota_week");
-    rows.push(Value::Array(weekly_row));
+    append_window_rows(rows, "quota_5h");
+    append_window_rows(rows, "quota_week");
+}
 
-    let mut topic_row = Array::new();
-    topic_row.push("$quota_topic");
-    rows.push(Value::Array(topic_row));
+fn append_window_rows(rows: &mut Array, base: &str) {
+    rows.push(Value::Array(styled_row(
+        &format!("${base}_normal"),
+        Some("#2e8b57"),
+        Some(true),
+        Some(false),
+    )));
+    rows.push(Value::Array(styled_row(
+        &format!("${base}_warning"),
+        Some("#c47f00"),
+        Some(true),
+        Some(false),
+    )));
+    rows.push(Value::Array(styled_row(
+        &format!("${base}_danger"),
+        Some("#d14343"),
+        Some(true),
+        Some(false),
+    )));
+}
+
+fn styled_row(token: &str, fg: Option<&str>, bold: Option<bool>, dim: Option<bool>) -> Array {
+    let mut row = Array::new();
+    row.push(styled_token(token, fg, bold, dim));
+    row
+}
+
+fn styled_token(token: &str, fg: Option<&str>, bold: Option<bool>, dim: Option<bool>) -> Value {
+    let mut value = InlineTable::new();
+    value.insert("token", Value::from(token));
+    if let Some(fg) = fg {
+        value.insert("fg", Value::from(fg));
+    }
+    if let Some(bold) = bold {
+        value.insert("bold", Value::from(bold));
+    }
+    if let Some(dim) = dim {
+        value.insert("dim", Value::from(dim));
+    }
+    Value::InlineTable(value)
 }
 
 fn print_diff_hint() {
     println!("  keep Herdr's official state icon and plane tab");
-    println!("  add provider, separate 5h/week rows, and a live user-prompt row");
+    println!("  show the user prompt before separate, severity-colored 5h/week rows");
 }
 
 #[cfg(test)]
@@ -323,7 +457,9 @@ rows = [["state_icon", "agent"]]
         assert!(updated.contains("$quota_week"));
         assert!(updated.contains("state_icon"));
         assert!(updated.contains("agent"));
-        assert_eq!(updated.matches("[\"").count(), 4);
+        assert!(updated.contains("$quota_topic"));
+        assert!(updated.contains("$quota_5h_warning"));
+        assert!(updated.contains("$quota_week_danger"));
         assert_eq!(add_quota_row(&updated).unwrap(), updated);
     }
 
@@ -351,5 +487,21 @@ rows = [["$quota_provider", "$quota_status"], ["$quota_summary"]]
         assert!(updated.contains("$quota_5h"));
         assert!(updated.contains("$quota_week"));
         assert_eq!(add_quota_row(&updated).unwrap(), updated);
+    }
+
+    #[test]
+    fn preserves_user_owned_provider_rows() {
+        let original = r#"[ui.sidebar.agents]
+rows = [["state_icon", "agent"]]
+
+[ui.sidebar.agents.rows_by_agent]
+claude = [["state_icon", "agent"]]
+"#;
+        let updated = add_quota_row(original).unwrap();
+        assert!(updated.contains("claude = [[\"state_icon\", \"agent\"]]"));
+        assert!(updated.contains("codex ="));
+        let removed = remove_quota_row(&updated).unwrap();
+        assert!(removed.contains("claude = [[\"state_icon\", \"agent\"]]"));
+        assert!(!removed.contains("codex ="));
     }
 }
