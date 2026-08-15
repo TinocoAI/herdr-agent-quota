@@ -3,3 +3,4 @@
 .DS_Store
 .env
 .herdr-agent-quota/
+.herdr-state/

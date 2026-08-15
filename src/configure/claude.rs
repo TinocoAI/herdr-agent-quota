@@ -41,14 +41,29 @@ pub fn apply() -> Result<()> {
             .context("write Claude statusLine backup")?;
     }
     let executable = std::env::current_exe().context("resolve plugin executable")?;
-    settings["statusLine"] = json!({
-        "type": "command",
-        "command": format!(
-            "HERDR_PLUGIN_STATE_DIR={} {} claude-statusline",
-            shell_quote(cache.root()),
-            shell_quote(&executable)
-        )
-    });
+    let wrapper_command = format!(
+        "HERDR_PLUGIN_STATE_DIR={} {} claude-statusline",
+        shell_quote(cache.root()),
+        shell_quote(&executable)
+    );
+    let status_line = settings
+        .get_mut("statusLine")
+        .and_then(Value::as_object_mut)
+        .map(|object| {
+            object.insert("type".to_string(), Value::String("command".to_string()));
+            object.insert(
+                "command".to_string(),
+                Value::String(wrapper_command.clone()),
+            );
+            Value::Object(object.clone())
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "type": "command",
+                "command": wrapper_command,
+            })
+        });
+    settings["statusLine"] = status_line;
     write_settings(&path, &settings)
 }
 
@@ -196,5 +211,25 @@ mod tests {
         let saved = read_settings(&path).unwrap();
         assert_eq!(saved["theme"], "dark");
         assert!(is_installed(saved.get("statusLine")));
+    }
+
+    #[test]
+    fn wrapper_replacement_keeps_existing_statusline_options() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"statusLine":{"type":"command","command":"echo old","refreshInterval":5}}"#,
+        )
+        .unwrap();
+        let mut settings = read_settings(&path).unwrap();
+        let object = settings["statusLine"].as_object_mut().unwrap();
+        object.insert(
+            "command".to_string(),
+            Value::String("/tmp/herdr-agent-quota claude-statusline".to_string()),
+        );
+        write_settings(&path, &settings).unwrap();
+        let saved = read_settings(&path).unwrap();
+        assert_eq!(saved["statusLine"]["refreshInterval"], 5);
     }
 }
