@@ -1,7 +1,6 @@
 use crate::model::{Provider, ProviderSnapshot};
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
-use fs2::FileExt;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -57,13 +56,18 @@ impl CacheStore {
         ));
         let bytes = serde_json::to_vec_pretty(snapshot).context("serialize quota snapshot")?;
         fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
-        fs::rename(&temporary, &destination).with_context(|| {
-            format!(
-                "atomically replace {} with {}",
-                destination.display(),
-                temporary.display()
-            )
-        })?;
+        if let Err(error) = fs::rename(&temporary, &destination) {
+            // Otherwise a failed rename leaves the scratch file behind, and
+            // every later refresh adds another one.
+            let _ = fs::remove_file(&temporary);
+            return Err(error).with_context(|| {
+                format!(
+                    "atomically replace {} with {}",
+                    destination.display(),
+                    temporary.display()
+                )
+            });
+        }
         Ok(())
     }
 
@@ -77,7 +81,7 @@ impl CacheStore {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("open {}", path.display()))?;
-        file.lock_exclusive().context("lock refresh state")?;
+        file.lock().context("lock refresh state")?;
         let result = operation();
         let unlock_result = file.unlock().context("unlock refresh state");
         match (result, unlock_result) {

@@ -4,7 +4,8 @@ pub mod herdr;
 
 use anyhow::Result;
 
-pub fn run(check: bool, apply: bool, uninstall: bool) -> Result<()> {
+/// `--check` is also the no-flag default, so it needs no branch of its own.
+pub fn run(_check: bool, apply: bool, uninstall: bool) -> Result<()> {
     if uninstall {
         claude::uninstall()?;
         herdr::uninstall()?;
@@ -12,7 +13,6 @@ pub fn run(check: bool, apply: bool, uninstall: bool) -> Result<()> {
         herdr::apply()?;
         claude::apply()?;
     } else {
-        let _ = check;
         herdr::check()?;
         claude::check()?;
     }

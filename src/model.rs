@@ -42,15 +42,6 @@ impl Provider {
         }
     }
 
-    pub fn canonical_agent(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Grok => "grok",
-            Self::Claude => "claude",
-            Self::Agy => "agy",
-        }
-    }
-
     pub fn source(self) -> &'static str {
         match self {
             Self::Codex => "codex-app-server",
@@ -295,8 +286,8 @@ fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind) -> String {
 }
 
 pub fn format_percent(value: f64) -> String {
-    if (value - value.round()).abs() < f64::EPSILON {
-        format!("{}", value.round() as u64)
+    if value.fract() == 0.0 {
+        format!("{}", value as u64)
     } else {
         format!("{value:.1}")
     }

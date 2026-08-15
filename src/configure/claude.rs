@@ -108,32 +108,53 @@ pub fn uninstall() -> Result<()> {
 pub fn run_statusline_hook() -> Result<()> {
     let mut input = Vec::new();
     std::io::stdin().read_to_end(&mut input)?;
-    if let Ok(snapshot) = run_statusline(&input) {
+    let snapshot = run_statusline(&input).ok();
+    if let Some(snapshot) = &snapshot {
         if let Ok(cache) = CacheStore::from_env() {
-            if cache.save(&snapshot).is_ok() {
+            if cache.save(snapshot).is_ok() {
                 let panes = list_agent_panes().unwrap_or_default();
-                let tokens = [(Provider::Claude, MetadataTokens::from_snapshot(&snapshot))];
+                let tokens = [(Provider::Claude, MetadataTokens::from_snapshot(snapshot))];
                 let _ = publish_tokens(&panes, &tokens, CacheStore::now_millis());
             }
         }
     }
-    if let Some(command) = previous_statusline_command()? {
-        let mut child = Command::new("sh")
-            .args(["-c", &command])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .context("run previous Claude statusLine")?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(&input)?;
+    // Claude renders this hook's stdout as the status line. With nothing to
+    // chain, staying silent would blank a status line the user did have, so
+    // fall back to the same one-line summary the Agy hook prints.
+    //
+    // This must print exactly one line on every tick, including the ticks
+    // whose payload carries no `rate_limits`. Printing only sometimes would
+    // make the status line oscillate between one line and none, which shifts
+    // the whole pane up and down on every refresh.
+    let Some(command) = previous_statusline_command()? else {
+        let cached = match snapshot {
+            Some(snapshot) => Some(snapshot),
+            None => CacheStore::from_env()
+                .and_then(|cache| cache.load(Provider::Claude))
+                .ok()
+                .flatten(),
+        };
+        match cached {
+            Some(snapshot) => println!("Claude | {}", snapshot.summary()),
+            None => println!("Claude | quota N/A"),
         }
-        let output = child.wait_with_output()?;
-        std::io::stdout().write_all(&output.stdout)?;
-        std::io::stdout().flush()?;
-        if !output.status.success() {
-            std::process::exit(output.status.code().unwrap_or(1));
-        }
+        return Ok(());
+    };
+    let mut child = Command::new("sh")
+        .args(["-c", &command])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("run previous Claude statusLine")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&input)?;
+    }
+    let output = child.wait_with_output()?;
+    std::io::stdout().write_all(&output.stdout)?;
+    std::io::stdout().flush()?;
+    if !output.status.success() {
+        std::process::exit(output.status.code().unwrap_or(1));
     }
     Ok(())
 }

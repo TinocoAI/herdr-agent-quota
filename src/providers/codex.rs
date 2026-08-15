@@ -5,15 +5,14 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn parse_rate_limits(
     value: &Value,
@@ -82,45 +81,44 @@ pub fn fetch() -> Result<ProviderSnapshot> {
         .take()
         .context("open codex app-server stdout")?;
     let mut output = BufReader::new(stdout);
-    let finished = Arc::new(AtomicBool::new(false));
-    let timer_finished = Arc::clone(&finished);
-    let pid = child.id();
+
+    // The watchdog and this thread share the child, so it can only ever be
+    // signalled while it is still unreaped. Signalling a bare pid after
+    // `wait` would race with the operating system recycling that pid.
+    let child = Arc::new(Mutex::new(Some(child)));
+    let watchdog = Arc::clone(&child);
     thread::spawn(move || {
-        thread::sleep(Duration::from_secs(15));
-        if !timer_finished.load(Ordering::Acquire) {
-            unsafe {
-                #[cfg(unix)]
-                libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
-            }
-        }
+        thread::sleep(REQUEST_TIMEOUT);
+        terminate(&watchdog);
     });
-    let result = fetch_from_process(&mut child, &mut input, &mut output);
-    finished.store(true, Ordering::Release);
-    terminate_process_tree(&mut child);
-    let _ = child.wait();
+
+    let result = fetch_from_process(&mut input, &mut output);
+    terminate(&child);
     result
 }
 
-fn terminate_process_tree(child: &mut Child) {
-    let pid = child.id();
+/// Kill the app-server's process group and reap it, at most once.
+///
+/// Whichever of the request thread and the watchdog gets here first takes the
+/// child; the other one finds an empty slot and does nothing.
+fn terminate(child: &Mutex<Option<Child>>) {
+    let Ok(mut slot) = child.lock() else {
+        return;
+    };
+    let Some(mut child) = slot.take() else {
+        return;
+    };
+    // `pre_exec` put the app-server in its own process group, so this also
+    // collects any helper it spawned.
     #[cfg(unix)]
     unsafe {
-        let _ = libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
     }
     let _ = child.kill();
-    #[cfg(unix)]
-    {
-        let _ = Command::new("pkill")
-            .args(["-KILL", "-P", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+    let _ = child.wait();
 }
 
 fn fetch_from_process(
-    _child: &mut Child,
     input: &mut ChildStdin,
     output: &mut BufReader<impl std::io::Read>,
 ) -> Result<ProviderSnapshot> {

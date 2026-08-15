@@ -85,6 +85,8 @@ pub fn publish_tokens(
     sequence: u64,
 ) -> Result<()> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+    let mut reported = 0usize;
+    let mut failed = Vec::new();
     for pane in panes {
         let Some((_, values)) = tokens
             .iter()
@@ -92,6 +94,7 @@ pub fn publish_tokens(
         else {
             continue;
         };
+        reported += 1;
         let mut command = Command::new(&executable);
         let topic = if pane.topic.trim().is_empty() {
             truncate_topic(&values.quota_topic)
@@ -134,8 +137,17 @@ pub fn publish_tokens(
         }
         let output = command.output().context("report quota metadata to Herdr")?;
         if !output.status.success() {
-            anyhow::bail!("Herdr metadata report failed for {}", pane.pane_id);
+            failed.push(pane.pane_id.clone());
         }
+    }
+    // A pane can exit between `agent list` and this report, and the exit event
+    // itself triggers a publish. One stale pane id must not stop the panes
+    // that are still alive from being updated.
+    if reported > 0 && failed.len() == reported {
+        anyhow::bail!(
+            "Herdr metadata report failed for every pane: {}",
+            failed.join(", ")
+        );
     }
     Ok(())
 }

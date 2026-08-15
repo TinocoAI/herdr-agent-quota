@@ -1,7 +1,7 @@
 use crate::cache::CacheStore;
 use crate::herdr::{list_agent_panes, publish_tokens};
 use crate::model::{MetadataTokens, Provider};
-use crate::providers::{claude, codex, grok};
+use crate::providers::{codex, grok};
 use anyhow::Result;
 use serde::Serialize;
 
@@ -25,13 +25,6 @@ pub fn run(providers: &[Provider], force: bool, json: bool) -> Result<()> {
 
 pub fn event() -> Result<()> {
     run(&Provider::ALL, false, false)
-}
-
-pub fn run_claude_statusline(input: &[u8]) -> Result<()> {
-    let snapshot = claude::run_statusline(input).map_err(anyhow::Error::from)?;
-    let cache = CacheStore::from_env()?;
-    cache.save(&snapshot)?;
-    Ok(())
 }
 
 fn refresh_locked(
