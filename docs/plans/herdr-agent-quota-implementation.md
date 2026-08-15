@@ -1,8 +1,8 @@
 # herdr-agent-quota implementation plan
 
-Status: approved design, ready to dispatch  
+Status: implemented and published
 Plan date: 2026-08-15  
-Implementation status: in progress; provider contracts, cache, configuration, dashboard, fixtures, and manifest are implemented locally
+Implementation status: complete; local Herdr smoke checks, provider fixtures, release gates, and public repository publication passed
 
 ## 1. Outcome
 
@@ -68,9 +68,10 @@ Implement and test against these current stable releases, checked on the plan da
 | Claude Code | [`v2.1.233`](https://github.com/anthropics/claude-code/releases/tag/v2.1.233) | `statusLine` JSON `rate_limits` fields |
 | Grok Build | source contract at [`eb267fe`](https://github.com/xai-org/grok-build/commit/eb267feff13129e568df38fb6fdf0ceb65f735d6) | CLI auth file and credits billing response |
 
-The binary must check detected versions before using a provider adapter. An
-unsupported version produces a clear unavailable reason; v1 does not guess across
-unknown schemas. Herdr should set `min_herdr_version = "0.8.0"` in the manifest.
+The implementation is validated against these detected versions and fails closed
+on malformed or changed response shapes; it does not reject a newer patch release
+solely because its version string changed. Herdr sets `min_herdr_version = "0.8.0"`
+in the manifest.
 
 ## 4. Host constraints that shape the design
 
@@ -299,11 +300,13 @@ requests on the user's behalf.
 1. Locate the active Herdr config using the v0.8-supported path/CLI.
 2. Parse and edit with a format-preserving TOML editor.
 3. Back up the original once with a deterministic adjacent name.
-4. Add provider-specific `rows_by_agent` entries containing `$quota_badge`,
-   `$quota_state`, and `$quota_summary` while retaining the user's existing rows.
+4. Add one shared Agent row containing `$quota_badge`, `$quota_state`, and
+   `$quota_summary` while retaining the user's existing rows. Users who want
+   provider-specific styling can copy the same tokens into `rows_by_agent`; the
+   helper does not overwrite those projections.
 5. Be idempotent: a second apply produces no diff.
-6. Validate the resulting config before replacement and reload Herdr config if the
-   supported CLI permits it.
+6. Validate the resulting config before replacement. The user can apply it to a
+   running Herdr session with `herdr server reload-config`.
 7. Record only the plugin-owned edit needed for a precise uninstall.
 
 `--uninstall` removes only plugin-owned row additions and restores the previous
@@ -477,7 +480,7 @@ Depends on: package 8 passing.
   failure messages.
 - Include a real screenshot with no private workspace or account data.
 - GitHub description:
-  `Live Claude Code, Codex, and Grok quotas in Herdr: provider badges, 5-hour/weekly remaining limits, and lightweight agent sidebar status.`
+  `Live Claude Code, Codex, and Grok quotas in Herdr: provider badges, 5-hour/weekly remaining percentages, and color-coded warnings in the agent sidebar.`
 - Create the public repository `herdr-agent-quota` under the authorized account only
   after GitHub CLI authentication is repaired and the owner confirms the final diff.
 - Add no more than 20 topics. Required/recommended:
@@ -534,6 +537,14 @@ The project is done only when all of the following are true:
 - macOS and Linux verification gates pass.
 - The public GitHub repository and Herdr marketplace metadata accurately describe
   the shipped behavior and limitations.
+
+Implementation audit (2026-08-15): `cargo fmt --all -- --check`, `cargo clippy
+--all-targets --all-features -- -D warnings`, `cargo test --all-targets
+--all-features --locked`, and `cargo build --release --locked` pass. A Herdr
+v0.8.0 session is linked to the plugin and a live refresh publishes provider
+tokens to Claude, Grok, and Codex panes. The public repository is
+[`levi-qiao/herdr-agent-quota`](https://github.com/levi-qiao/herdr-agent-quota);
+Herdr marketplace indexing remains asynchronous after publication.
 
 ## 12. Primary references
 
