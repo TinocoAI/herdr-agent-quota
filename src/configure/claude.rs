@@ -1,4 +1,6 @@
 use crate::cache::CacheStore;
+use crate::herdr::{list_agent_panes, publish_tokens};
+use crate::model::{MetadataTokens, Provider};
 use crate::providers::claude::run_statusline;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -101,12 +103,15 @@ pub fn uninstall() -> Result<()> {
 pub fn run_statusline_hook() -> Result<()> {
     let mut input = Vec::new();
     std::io::stdin().read_to_end(&mut input)?;
-    let _ = run_statusline(&input)
-        .map_err(anyhow::Error::from)
-        .and_then(|snapshot| {
-            let cache = CacheStore::from_env()?;
-            cache.save(&snapshot)
-        });
+    if let Ok(snapshot) = run_statusline(&input) {
+        if let Ok(cache) = CacheStore::from_env() {
+            if cache.save(&snapshot).is_ok() {
+                let panes = list_agent_panes().unwrap_or_default();
+                let tokens = [(Provider::Claude, MetadataTokens::from_snapshot(&snapshot))];
+                let _ = publish_tokens(&panes, &tokens, CacheStore::now_unix());
+            }
+        }
+    }
     if let Some(command) = previous_statusline_command()? {
         let mut child = Command::new("sh")
             .args(["-c", &command])
