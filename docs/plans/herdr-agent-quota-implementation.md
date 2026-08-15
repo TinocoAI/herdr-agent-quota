@@ -199,14 +199,15 @@ herdr-agent-quota agy-statusline
 Declare one-shot startup and event hooks in `herdr-plugin.toml`:
 
 - Startup: `refresh --provider all`.
-- Events: `pane.agent_detected`, `pane.agent_status_changed`, `pane.focused`, and
-  `pane.exited`.
+- Events: `pane.agent_detected`, `pane.agent_status_changed`, and `pane.exited`.
 - Manual action: force refresh all providers.
 
 Use a state-file timestamp and a cross-process lock to coalesce non-forced provider
 refreshes occurring within 60 seconds. A manual refresh bypasses the timestamp but
 still takes the lock. Do not subscribe to raw output or `pane.updated`; those events
-are too frequent for quota checks.
+are too frequent for quota checks. Do not subscribe to `pane.focused`: the refresh
+reads and reports pane metadata through Herdr, and Herdr 0.8 can emit more focus
+events for those commands, creating an event feedback loop.
 
 ### Snapshot model
 
