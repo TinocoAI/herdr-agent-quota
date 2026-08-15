@@ -34,8 +34,8 @@ a failed refresh does not replace it with `unavailable`.
 
 The sidebar is intentionally text-based. Herdr plugin v1 accepts custom text
 tokens but cannot inject brand SVG/PNG icons into its Agent renderer. The
-sidebar therefore uses compact lettered markers (`◈C`, `✕G`, `✦Cl`, `△Ag`)
-beside the CLI name, without repeating a long provider name.
+default layout therefore keeps the provider name once and omits decorative
+markers; the optional legacy marker tokens remain available for custom layouts.
 
 ## Data sources and privacy
 
@@ -92,19 +92,18 @@ row is:
 ```toml
 [ui.sidebar.agents]
 rows = [
-  ["state_icon", "pane", "tab"],
-  ["agent", "$quota_icon", "$quota_5h"],
-  ["$quota_week"],
+  ["state_icon", "tab", "$quota_provider"],
+  ["$quota_summary"],
+  ["terminal_title_stripped"],
 ]
 ```
 
-这保留 Herdr 官方的状态/pane/Tab 提示，但不展示目录；5h 在第一条配额行，完整的 `week` 在下一行。
-`$quota_icon` 是紧凑的提供商标识，避免 CLI 名称与提供商名字重复。如果你已有自己的
-`rows`，保留原有 token，只加入 `$quota_icon`、`$quota_5h` 和 `$quota_week`。
+这保留 Herdr 官方的状态/plane 提示，但不展示目录；第一行是 `Owner · Grok`，第二行只放额度，第三行单独显示 CLI 话题。
+`terminal_title_stripped` 是 Herdr 服务器实时维护的 CLI 终端标题，所以不需要常驻进程或插件轮询。
+如果你已有自己的 `rows`，保留原有 token，只加入 `$quota_provider`、`$quota_summary` 和 `terminal_title_stripped`。
 
 Herdr 左侧只能渲染文本 token，不能由插件注入 SVG；仓库中的
-[`docs/icons/`](docs/icons/) 是可复用的彩色 SVG 标识，详情 pane/README 预览会使用它们，
-sidebar 则使用带字母的文本 fallback（`◈C`、`✕G`、`✦Cl`、`△Ag`）。
+[`docs/icons/`](docs/icons/) 保留为详情 pane/README 的可选视觉资产，默认 sidebar 不再显示图标标记。
 
 To feed Agy's lightweight statusLine hook, set its native `/statusline` command
 to the built binary (the command receives JSON on stdin):

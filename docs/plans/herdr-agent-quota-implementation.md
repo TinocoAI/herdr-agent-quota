@@ -103,13 +103,12 @@ readable tokens and keeps the old pair for existing configurations:
 Recommended compact values:
 
 ```text
-● pane · tab
-Codex 5h N/A
-  week 39%
-Claude 5h 42%
-  week 73%
-Agy 5h 99.7%
-  week 99.7%
+● Owner · Grok
+week 39%
+B-325 budget cap
+● Owner · Claude
+5h 42% · week 73%
+refactor auth middleware
 ```
 
 The same provider-level snapshot is repeated on every matching agent pane. Token
@@ -331,12 +330,13 @@ requests on the user's behalf.
 1. Locate the active Herdr config using the v0.8-supported path/CLI.
 2. Parse and edit with a format-preserving TOML editor.
 3. Back up the original once with a deterministic adjacent name.
-4. Retain Herdr's official `state_icon`/`pane`/`tab` row (without the directory),
-   keep the `agent` token, and add a three-line layout: provider mark + 5h on
-   the first quota line, then the full-word weekly value. Users who want
-   provider-specific styling can copy `$quota_icon`, `$quota_5h`, and
-   `$quota_week` into `rows_by_agent`; the helper does not overwrite those
-   projections.
+4. Retain Herdr's official `state_icon`/`tab` row (without the directory),
+   add Herdr's server-owned `terminal_title_stripped` topic as its own row,
+   add `$quota_provider` to the plane row, and add one compact quota-summary
+   row. This keeps every agent to three readable lines and shows the provider
+   name only once. Users who want provider-specific styling can copy
+   `$quota_provider` and `$quota_summary` into `rows_by_agent`;
+   the helper does not overwrite those projections.
 5. Be idempotent: a second apply produces no diff.
 6. Validate the resulting config before replacement. The user can apply it to a
    running Herdr session with `herdr server reload-config`.

@@ -109,7 +109,7 @@ pub fn add_quota_row(input: &str) -> Result<String> {
     }
 
     // If an older version replaced every row with quota-only rows, restore
-    // Herdr's official state/pane/tab row before adding our metadata.
+    // Herdr's official state/tab row before adding provider, usage, and topic.
     if updated_rows.is_empty() {
         updated_rows.push(Value::Array(default_state_row()));
     }
@@ -141,6 +141,11 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
     let mut retained = Array::new();
     for row in rows.iter() {
         let cleaned = strip_quota_tokens(row);
+        if cleaned.len() == 1
+            && cleaned.iter().next().and_then(Value::as_str) == Some("terminal_title_stripped")
+        {
+            continue;
+        }
         if !cleaned.is_empty() {
             retained.push(Value::Array(cleaned));
         }
@@ -179,64 +184,115 @@ fn strip_quota_tokens(row: &Value) -> Array {
 fn default_state_row() -> Array {
     let mut row = Array::new();
     row.push("state_icon");
-    row.push("pane");
     row.push("tab");
     row
 }
 
 fn normalize_official_row(row: Array) -> Array {
     let has_state_icon = row.iter().any(|item| item.as_str() == Some("state_icon"));
-    if !has_state_icon {
+    if !has_state_icon || row.iter().any(|item| item.as_str() == Some("agent")) {
         return row;
     }
     let mut normalized = Array::new();
-    let mut has_pane = false;
+    let mut has_tab = false;
     for item in row {
         match item.as_str() {
-            Some("workspace") => {
-                if !has_pane {
-                    normalized.push("pane");
-                    has_pane = true;
+            Some("workspace") | Some("pane") => {
+                if !has_tab {
+                    normalized.push("tab");
+                    has_tab = true;
                 }
             }
-            Some("pane") => {
-                has_pane = true;
-                normalized.push(item);
+            Some("tab") => {
+                if !has_tab {
+                    has_tab = true;
+                    normalized.push(item);
+                }
             }
+            Some("terminal_title_stripped") => {}
             _ => normalized.push(item),
         }
+    }
+    if !has_tab {
+        let insert_at = normalized
+            .iter()
+            .position(|item| item.as_str() == Some("terminal_title_stripped"))
+            .unwrap_or(normalized.len());
+        normalized.insert(insert_at, "tab");
     }
     normalized
 }
 
 fn append_quota_rows(rows: &mut Array) {
-    // Keep the official agent token on its existing row when possible. This
-    // makes the layout three lines without hiding Herdr's own metadata.
-    let agent_index = rows.iter().position(|row| {
-        row.as_array()
-            .is_some_and(|items| items.iter().any(|item| item.as_str() == Some("agent")))
-    });
-    if let Some(agent_row) =
-        agent_index.and_then(|index| rows.get_mut(index).and_then(Value::as_array_mut))
-    {
-        agent_row.push("$quota_icon");
-        agent_row.push("$quota_5h");
-    } else {
-        let mut agent_row = Array::new();
-        agent_row.push("agent");
-        agent_row.push("$quota_icon");
-        agent_row.push("$quota_5h");
-        rows.push(Value::Array(agent_row));
+    // Keep the official state row on its existing row when possible. This
+    // makes the layout three compact lines: plane/provider, usage, and topic.
+    let mut usage_row_found = false;
+    let mut combined_state_agent = false;
+    for row in rows.iter_mut() {
+        let Some(items) = row.as_array_mut() else {
+            continue;
+        };
+        let has_agent = items.iter().any(|item| item.as_str() == Some("agent"));
+        let has_state_icon = items.iter().any(|item| item.as_str() == Some("state_icon"));
+        let mut cleaned = Array::new();
+        for item in items.iter() {
+            match item.as_str() {
+                Some("terminal_title_stripped") => {}
+                Some("agent") if !has_state_icon => {}
+                _ => cleaned.push(item.clone()),
+            }
+        }
+        if has_agent && has_state_icon {
+            combined_state_agent = true;
+            cleaned.push("$quota_summary");
+            usage_row_found = true;
+        } else if has_agent {
+            cleaned.push("$quota_summary");
+            usage_row_found = true;
+        }
+        *items = cleaned;
     }
 
-    let mut weekly_row = Array::new();
-    weekly_row.push("$quota_week");
-    rows.push(Value::Array(weekly_row));
+    let mut compacted_rows = Array::new();
+    for row in rows.iter() {
+        if row.as_array().is_some_and(|items| !items.is_empty()) {
+            compacted_rows.push(row.clone());
+        }
+    }
+    *rows = compacted_rows;
+
+    let official_index = rows.iter().position(|row| {
+        row.as_array().is_some_and(|items| {
+            items.iter().any(|item| item.as_str() == Some("state_icon"))
+                && !items.iter().any(|item| item.as_str() == Some("agent"))
+        })
+    });
+
+    if let Some(index) = official_index {
+        if let Some(row) = rows.get_mut(index).and_then(Value::as_array_mut) {
+            if !row
+                .iter()
+                .any(|item| item.as_str() == Some("$quota_provider"))
+            {
+                row.push("$quota_provider");
+            }
+        }
+    }
+
+    if !usage_row_found && !combined_state_agent {
+        let mut usage_row = Array::new();
+        usage_row.push("$quota_summary");
+        rows.push(Value::Array(usage_row));
+    }
+
+    let mut topic_row = Array::new();
+    topic_row.push("terminal_title_stripped");
+    rows.push(Value::Array(topic_row));
 }
 
 fn print_diff_hint() {
-    println!("  keep Herdr's official state/pane/tab row (without the directory)");
-    println!("  add agent + provider mark + 5h, then a full-word week row");
+    println!("  keep Herdr's official state icon and plane tab");
+    println!("  add provider, one usage row, and a separate live terminal topic row");
 }
 
 #[cfg(test)]
@@ -249,9 +305,7 @@ mod tests {
 rows = [["state_icon", "agent"]]
 "#;
         let updated = add_quota_row(original).unwrap();
-        assert!(updated.contains("$quota_icon"));
-        assert!(updated.contains("$quota_5h"));
-        assert!(updated.contains("$quota_week"));
+        assert!(updated.contains("$quota_summary"));
         assert!(updated.contains("state_icon"));
         assert!(updated.contains("agent"));
         assert_eq!(updated.matches("[\"").count(), 2);
@@ -261,13 +315,14 @@ rows = [["state_icon", "agent"]]
     #[test]
     fn removes_plugin_tokens_but_keeps_the_official_agent_row() {
         let original = r#"[ui.sidebar.agents]
-rows = [["state_icon", "pane", "tab"], ["agent", "$quota_icon", "$quota_5h"], ["$quota_week"]]
+rows = [["state_icon", "pane", "terminal_title_stripped"], ["agent", "$quota_icon", "$quota_5h"], ["$quota_week"]]
 "#;
         let updated = remove_quota_row(original).unwrap();
         assert!(updated.contains("state_icon"));
         assert!(updated.contains("agent"));
+        assert!(!updated.contains("$quota_summary"));
         assert!(!updated.contains("$quota_icon"));
-        assert!(!updated.contains("$quota_week"));
+        assert!(updated.contains("terminal_title_stripped"));
     }
 
     #[test]
@@ -277,9 +332,8 @@ rows = [["$quota_provider", "$quota_status"], ["$quota_summary"]]
 "#;
         let updated = add_quota_row(original).unwrap();
         assert!(updated.contains("state_icon"));
-        assert!(updated.contains("$quota_icon"));
-        assert!(updated.contains("$quota_5h"));
-        assert!(updated.contains("$quota_week"));
+        assert!(updated.contains("$quota_provider"));
+        assert!(updated.contains("$quota_summary"));
         assert_eq!(add_quota_row(&updated).unwrap(), updated);
     }
 }
