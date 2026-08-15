@@ -48,7 +48,8 @@ place and reports the failure in the detail pane/action output.
 ## Build and local link
 
 Requirements: Herdr `v0.8.0+`, Rust `1.95.0`, Codex `0.147.0`, and Claude Code
-`v2.1.233+` for the tested contracts. macOS and Linux are supported.
+with the official `statusLine` `rate_limits` fields (the local smoke test used
+`2.1.232`; the reviewed contract is `2.1.233`). macOS and Linux are supported.
 
 ```sh
 cargo test --locked

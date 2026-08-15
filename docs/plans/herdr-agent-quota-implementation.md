@@ -65,7 +65,7 @@ Implement and test against these current stable releases, checked on the plan da
 | --- | --- | --- |
 | Herdr | [`v0.8.0`](https://github.com/herdrdev/herdr/releases/tag/v0.8.0) | plugin v1 manifest, CLI/socket schema, custom sidebar metadata |
 | Codex CLI | [`0.147.0`](https://github.com/openai/codex/releases/tag/rust-v0.147.0) | `codex app-server --stdio`, `account/rateLimits/read` |
-| Claude Code | [`v2.1.233`](https://github.com/anthropics/claude-code/releases/tag/v2.1.233) | `statusLine` JSON `rate_limits` fields |
+| Claude Code | [`v2.1.233`](https://github.com/anthropics/claude-code/releases/tag/v2.1.233) (local smoke test: `2.1.232`) | `statusLine` JSON `rate_limits` fields |
 | Grok Build | source contract at [`eb267fe`](https://github.com/xai-org/grok-build/commit/eb267feff13129e568df38fb6fdf0ceb65f735d6) | CLI auth file and credits billing response |
 
 The implementation is validated against these detected versions and fails closed
