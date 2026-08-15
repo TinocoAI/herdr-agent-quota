@@ -75,7 +75,7 @@ mod tests {
             }
         });
         let snapshot = parse_statusline(&value, 1).unwrap();
-        assert_eq!(snapshot.summary(), "5h 42% left · wk 73% left");
+        assert_eq!(snapshot.summary(), "5h 42% left · week 73% left");
     }
 
     #[test]

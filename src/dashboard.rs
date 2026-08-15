@@ -60,12 +60,12 @@ fn render_snapshot(cache: &CacheStore) -> Result<String> {
 pub fn render_provider(provider: Provider, snapshot: Option<&ProviderSnapshot>) -> String {
     match snapshot {
         Some(snapshot) => format!(
-            "{} {} {}",
-            provider.badge(),
-            snapshot.severity().symbol(),
+            "{} {}\r\n  {}",
+            provider.display_name(),
+            snapshot.severity().label(),
             snapshot.summary()
         ),
-        None => format!("{} ? unavailable", provider.badge()),
+        None => format!("{} N/A\r\n  unavailable", provider.display_name()),
     }
 }
 
@@ -86,7 +86,7 @@ mod tests {
             1,
         );
         let rendered = render_provider(Provider::Claude, Some(&snapshot));
-        assert_eq!(rendered, "[A] ● 5h 42% left · wk 73% left");
+        assert_eq!(rendered, "Claude OK\r\n  5h 42% left · week 73% left");
         assert!(!rendered.contains("2026"));
     }
 
@@ -94,7 +94,7 @@ mod tests {
     fn snapshot_lines_return_to_column_zero_in_herdr_pty() {
         let directory = tempdir().unwrap();
         let rendered = render_snapshot(&CacheStore::new(directory.path())).unwrap();
-        assert!(rendered.contains("Quota\r\n=================\r\n[C]"));
+        assert!(rendered.contains("Quota\r\n=================\r\nCodex"));
         assert!(!rendered.contains("Quota\n================="));
     }
 }

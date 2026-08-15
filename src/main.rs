@@ -18,5 +18,6 @@ fn main() -> Result<()> {
             uninstall,
         } => herdr_agent_quota::configure::run(check, apply, uninstall),
         Command::ClaudeStatusline => herdr_agent_quota::configure::claude::run_statusline_hook(),
+        Command::AgyStatusline => herdr_agent_quota::configure::agy::run_statusline_hook(),
     }
 }

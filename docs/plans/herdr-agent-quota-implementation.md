@@ -12,7 +12,9 @@ active local account's subscription quota in Herdr:
 - Codex: weekly remaining percentage.
 - Grok/SuperGrok: weekly remaining percentage.
 - Claude Code: five-hour and weekly remaining percentages.
-- Herdr Agents sidebar: one compact provider badge and quota row per agent.
+- Agy/Antigravity: five-hour and weekly statusLine windows, conservatively
+  aggregated across Gemini and third-party model pools.
+- Herdr Agents sidebar: a readable provider/status row plus a quota row per agent.
 - Optional read-only terminal pane: expanded quota details and diagnostics.
 
 The plugin must be lightweight. It must not run a resident daemon. Refreshes are
@@ -25,7 +27,7 @@ the user. Between triggers, the last successful value remains visible indefinite
 
 - Rust implementation on macOS and Linux.
 - One active local account per provider.
-- Text badges: `[C]` for Codex, `[X]` for Grok, `[A]` for Claude/Anthropic.
+- Text provider names: `Codex`, `Grok`, `Claude`, and `Agy`.
 - Remaining percentage is the primary number.
 - Remaining-value severity:
   - `> 30%`: normal, symbol `●`.
@@ -33,15 +35,16 @@ the user. Between triggers, the last successful value remains visible indefinite
   - `< 10%`: danger, symbol `!`.
   - no usable value: unknown, symbol `?`.
 - Static provider badge styling through Herdr `rows_by_agent`.
-- Dynamic severity represented by single-width symbols in the sidebar; the detail
-  pane may use terminal colors.
+- Dynamic severity represented by readable `OK`, `WARN`, `LOW`, and `N/A` labels;
+  legacy symbol tokens remain available for compatibility.
 - Manual Herdr configuration and an optional `configure` helper with preview,
   backup, apply, and uninstall paths.
 - A local cache containing only normalized usage snapshots.
 - No telemetry, no upload of usage data, no browser Cookie access, and no stored
   provider credentials.
 - Unknown or changed provider schemas fail safely. A failed refresh retains the
-  last successful snapshot; if there has never been a success, show unavailable.
+  last successful snapshot; if there has never been a success, the sidebar is not
+  overwritten with a transient `unavailable` value.
 
 ### Explicitly excluded from v1
 
@@ -84,23 +87,33 @@ not provide an SDK or native sidebar component API. The supported path is:
 3. Let the user reference those tokens from `[ui.sidebar.agents].rows` and
    `rows_by_agent`.
 
-Custom token values are capped at 80 characters. Keep the plugin to four tokens:
+Custom token values are capped at 80 characters. The plugin publishes the new
+readable tokens and keeps the old pair for existing configurations:
 
 - `$quota_badge`: `[C]`, `[X]`, or `[A]`.
 - `$quota_state`: `●`, `▲`, `!`, or `?`.
+- `$quota_icon`: compact text markers `◈C`, `✕G`, `✦Cl`, or `△Ag`.
+- `$quota_provider`: `Codex`, `Grok`, `Claude`, or `Agy` for custom layouts.
+- `$quota_status`: `OK`, `WARN`, `LOW`, or `N/A`.
+- `$quota_5h`: compact five-hour remaining value when the provider exposes it.
+- `$quota_week`: compact weekly remaining value.
 - `$quota_summary`: provider-specific compact remaining values.
 - `$quota_error`: short reason, intended for diagnostics rather than the default row.
 
 Recommended compact values:
 
 ```text
-[C] ● wk 39% left
-[X] ▲ wk 21% left
-[A] ● 5h 42% left · wk 73% left
+● pane · tab
+Codex 5h N/A
+  week 39%
+Claude 5h 42%
+  week 73%
+Agy 5h 99.7%
+  week 99.7%
 ```
 
 The same provider-level snapshot is repeated on every matching agent pane. Token
-updates use source `herdr-agent-quota`, a monotonic sequence number, and no expiry
+updates use source `herdr-agent-quota`, a monotonic sequence number, and a one-day
 TTL. Old successful values therefore remain until a later successful update.
 
 ## 5. Proposed project layout
@@ -124,17 +137,20 @@ TTL. Old successful values therefore remain until a later successful update.
 │   ├── configure
 │   │   ├── mod.rs
 │   │   ├── herdr.rs
-│   │   └── claude.rs
+│   │   ├── claude.rs
+│   │   └── agy.rs
 │   └── providers
 │       ├── mod.rs
 │       ├── codex.rs
 │       ├── grok.rs
-│       └── claude.rs
+│       ├── claude.rs
+│       └── agy.rs
 ├── tests
 │   ├── fixtures
 │   │   ├── codex
 │   │   ├── grok
-│   │   └── claude
+│   │   ├── claude
+│   │   └── agy
 │   ├── provider_contracts.rs
 │   ├── configure_round_trip.rs
 │   └── metadata_rendering.rs
@@ -163,6 +179,7 @@ herdr-agent-quota configure --check
 herdr-agent-quota configure --apply
 herdr-agent-quota configure --uninstall
 herdr-agent-quota claude-statusline
+herdr-agent-quota agy-statusline
 ```
 
 - `refresh`: fetch, normalize, cache, and publish quota tokens.
@@ -173,6 +190,8 @@ herdr-agent-quota claude-statusline
 - `configure`: manage Herdr rows and the Claude statusLine wrapper.
 - `claude-statusline`: internal hook mode; parse stdin, update Claude's snapshot,
   then preserve the previous statusLine behavior.
+- `agy-statusline`: one-shot hook mode; parse Agy's official `quota` object,
+  cache it, and publish the sanitized snapshot.
 
 ### Refresh triggers
 
@@ -194,7 +213,7 @@ Use one normalized representation shared by adapters and renderers:
 
 ```text
 ProviderSnapshot
-  provider: Codex | Grok | Claude
+  provider: Codex | Grok | Claude | Agy
   source: stable source identifier
   windows: Vec<UsageWindow>
   fetched_at: UTC timestamp, cache/diagnostics only
@@ -281,6 +300,18 @@ Keep its parser isolated and fixture-tested so it can be replaced surgically.
 The plugin must not implement Claude.ai OAuth, read Claude credentials, or route
 requests on the user's behalf.
 
+### Agy/Antigravity
+
+1. Use Agy's native `/statusline` command to feed one JSON payload to the
+   one-shot `agy-statusline` hook; no resident process or external API call is
+   required.
+2. Read the official `quota` object keys `gemini-5h`, `gemini-weekly`, `3p-5h`,
+   and `3p-weekly`, each carrying a `remaining_fraction` value.
+3. When both Gemini and third-party pools are present, use the lowest remaining
+   value for each window so one sidebar row never overstates available quota.
+4. Cache only the normalized percentages and retain the previous snapshot when
+   a statusLine payload is missing or changes shape.
+
 ## 8. Herdr presentation
 
 ### Pane discovery and metadata
@@ -300,10 +331,12 @@ requests on the user's behalf.
 1. Locate the active Herdr config using the v0.8-supported path/CLI.
 2. Parse and edit with a format-preserving TOML editor.
 3. Back up the original once with a deterministic adjacent name.
-4. Add one shared Agent row containing `$quota_badge`, `$quota_state`, and
-   `$quota_summary` while retaining the user's existing rows. Users who want
-   provider-specific styling can copy the same tokens into `rows_by_agent`; the
-   helper does not overwrite those projections.
+4. Retain Herdr's official `state_icon`/`pane`/`tab` row (without the directory),
+   keep the `agent` token, and add a three-line layout: provider mark + 5h on
+   the first quota line, then the full-word weekly value. Users who want
+   provider-specific styling can copy `$quota_icon`, `$quota_5h`, and
+   `$quota_week` into `rows_by_agent`; the helper does not overwrite those
+   projections.
 5. Be idempotent: a second apply produces no diff.
 6. Validate the resulting config before replacement. The user can apply it to a
    running Herdr session with `herdr server reload-config`.
@@ -411,7 +444,7 @@ Depends on: packages 1–4.
 Owner scope: `src/herdr.rs`, `src/refresh.rs`, event fixtures, manifest hooks.
 
 - Discover provider panes from v0.8 JSON output.
-- Map cached provider snapshots to the four owned tokens.
+- Map cached provider snapshots to the readable provider/status/summary tokens.
 - Report metadata to every matching pane without altering semantic state.
 - Implement startup, approved event hooks, force refresh, cross-process coalescing,
   monotonic sequence values, and partial provider failure.
@@ -452,7 +485,7 @@ Depends on: packages 2–7.
 - Run all static and unit checks.
 - Test a fresh install, manual config, automatic config, repeated config, and
   uninstall in isolated temporary homes.
-- Smoke-test real signed-in Codex, Grok, and Claude Code accounts without recording
+- Smoke-test real signed-in Codex, Grok, Claude Code, and Agy accounts without recording
   their values.
 - Verify startup and each declared Herdr event hook.
 - Kill/exit every short-lived child and confirm no `herdr-agent-quota`, Codex
@@ -474,19 +507,19 @@ cargo build --release --locked
 Depends on: package 8 passing.
 
 - README first sentence:
-  `Show Claude Code, Codex, and Grok subscription usage in Herdr's agent sidebar.`
+  `Show Claude Code, Codex, Grok, and Agy subscription usage in Herdr's agent sidebar.`
 - Explain exact data sources, remaining-percentage semantics, single-account scope,
   no-daemon behavior, retained old values, configuration, uninstall, and provider
   failure messages.
 - Include a real screenshot with no private workspace or account data.
 - GitHub description:
-  `Live Claude Code, Codex, and Grok quotas in Herdr: provider badges, 5-hour/weekly remaining percentages, and color-coded warnings in the agent sidebar.`
+  `Live Claude Code, Codex, Grok, and Agy quotas in Herdr: provider names, 5-hour/weekly remaining percentages, and color-coded sidebar warnings.`
 - Create the public repository `herdr-agent-quota` under the authorized account only
   after GitHub CLI authentication is repaired and the owner confirms the final diff.
 - Add no more than 20 topics. Required/recommended:
   `herdr-plugin`, `herdr`, `rust`, `ai-agents`, `coding-agents`, `agent-usage`,
-  `quota-monitor`, `rate-limit`, `claude-code`, `codex`, `grok`, `xai`, `sidebar`,
-  `terminal`, `tui`.
+  `quota-monitor`, `rate-limit`, `claude-code`, `codex`, `grok`, `xai`, `agy`,
+  `antigravity`, `gemini`, `sidebar`, `statusline`.
 - Push `main`, confirm the root `herdr-plugin.toml`, and verify marketplace discovery
   after its documented indexing interval.
 
@@ -513,7 +546,7 @@ Package 1
 ```
 
 Recommended dispatch: one integration owner handles packages 0, 1, 5, 8, and 9;
-three provider owners handle packages 2–4; packages 6–7 can be assigned after their
+four provider owners handle packages 2–5; packages 6–7 can be assigned after their
 dependencies settle. Provider owners must not edit shared manifests or dependency
 files directly—send requested dependency changes to the integration owner.
 
@@ -521,10 +554,10 @@ files directly—send requested dependency changes to the integration owner.
 
 The project is done only when all of the following are true:
 
-- A real Herdr v0.8.0 session shows `[C]`, `[X]`, and `[A]` badges on matching agent
-  rows after configuration.
-- Codex and Grok show weekly remaining percentage; Claude shows five-hour and weekly
-  remaining percentages.
+- A real Herdr v0.8.0 session shows provider names and status labels on matching
+  two-line agent rows after configuration.
+- Codex and Grok show weekly remaining percentage; Claude and Agy show five-hour and
+  weekly remaining percentages when supplied by their statusLine payloads.
 - Values come from the approved subscription sources, not token counts or developer
   API billing.
 - With no further events, the last successful usage remains displayed unchanged.
@@ -542,7 +575,7 @@ Implementation audit (2026-08-15): `cargo fmt --all -- --check`, `cargo clippy
 --all-targets --all-features -- -D warnings`, `cargo test --all-targets
 --all-features --locked`, and `cargo build --release --locked` pass. A Herdr
 v0.8.0 session is linked to the plugin and a live refresh publishes provider
-tokens to Claude, Grok, and Codex panes. The public repository is
+tokens to Claude, Grok, Codex, and Agy panes. The public repository is
 [`levi-qiao/herdr-agent-quota`](https://github.com/levi-qiao/herdr-agent-quota);
 Herdr marketplace indexing remains asynchronous after publication.
 
@@ -555,6 +588,7 @@ Herdr marketplace indexing remains asynchronous after publication.
 - [Herdr marketplace](https://herdr.dev/docs/marketplace/)
 - [Codex app-server](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
 - [Claude Code statusLine](https://code.claude.com/docs/en/statusline)
+- [Antigravity `/usage` and statusLine quota](https://antigravity.google/docs/cli/commands/usage?app=antigravity)
 - [xAI Grok weekly usage FAQ](https://docs.x.ai/grok/faq)
 - [Local CodexBar/Grok investigation](../research/codexbar-grok-usage.md)
 - [CodexBar](https://github.com/steipete/CodexBar)

@@ -7,16 +7,38 @@ pub enum Provider {
     Codex,
     Grok,
     Claude,
+    Agy,
 }
 
 impl Provider {
-    pub const ALL: [Self; 3] = [Self::Codex, Self::Grok, Self::Claude];
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Grok, Self::Claude, Self::Agy];
 
     pub fn badge(self) -> &'static str {
         match self {
             Self::Codex => "[C]",
             Self::Grok => "[X]",
             Self::Claude => "[A]",
+            Self::Agy => "[G]",
+        }
+    }
+
+    /// Compact text marker for a narrow Herdr sidebar. Plugin v1 accepts text
+    /// tokens rather than provider SVGs, so the letters keep it recognizable.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Codex => "◈C",
+            Self::Grok => "✕G",
+            Self::Claude => "✦Cl",
+            Self::Agy => "△Ag",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Grok => "Grok",
+            Self::Claude => "Claude",
+            Self::Agy => "Agy",
         }
     }
 
@@ -25,6 +47,7 @@ impl Provider {
             Self::Codex => "codex",
             Self::Grok => "grok",
             Self::Claude => "claude",
+            Self::Agy => "agy",
         }
     }
 
@@ -33,6 +56,7 @@ impl Provider {
             Self::Codex => "codex-app-server",
             Self::Grok => "grok-cli-billing",
             Self::Claude => "claude-statusline",
+            Self::Agy => "agy-statusline",
         }
     }
 }
@@ -45,6 +69,7 @@ impl std::str::FromStr for Provider {
             "codex" => Ok(Self::Codex),
             "grok" => Ok(Self::Grok),
             "claude" | "claude-code" | "anthropic" => Ok(Self::Claude),
+            "agy" | "antigravity" | "antigravity-cli" => Ok(Self::Agy),
             other => Err(ModelError::UnknownProvider(other.to_string())),
         }
     }
@@ -61,7 +86,7 @@ impl WindowKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::FiveHour => "5h",
-            Self::Weekly => "wk",
+            Self::Weekly => "week",
         }
     }
 }
@@ -118,17 +143,39 @@ impl ProviderSnapshot {
         match self.provider {
             Provider::Codex | Provider::Grok => self
                 .window(WindowKind::Weekly)
-                .map(|window| format!("wk {}% left", format_percent(window.remaining_percent)))
-                .unwrap_or_else(|| "wk unavailable".to_string()),
-            Provider::Claude => {
+                .map(|window| format!("week {}% left", format_percent(window.remaining_percent)))
+                .unwrap_or_else(|| "week unavailable".to_string()),
+            Provider::Claude | Provider::Agy => {
                 let five_hour = self
                     .window(WindowKind::FiveHour)
                     .map(|window| format!("5h {}% left", format_percent(window.remaining_percent)))
                     .unwrap_or_else(|| "5h unavailable".to_string());
                 let weekly = self
                     .window(WindowKind::Weekly)
-                    .map(|window| format!("wk {}% left", format_percent(window.remaining_percent)))
-                    .unwrap_or_else(|| "wk unavailable".to_string());
+                    .map(|window| {
+                        format!("week {}% left", format_percent(window.remaining_percent))
+                    })
+                    .unwrap_or_else(|| "week unavailable".to_string());
+                format!("{five_hour} · {weekly}")
+            }
+        }
+    }
+
+    pub fn sidebar_summary(&self) -> String {
+        match self.provider {
+            Provider::Codex | Provider::Grok => self
+                .window(WindowKind::Weekly)
+                .map(|window| format!("week {}%", format_percent(window.remaining_percent)))
+                .unwrap_or_else(|| "week N/A".to_string()),
+            Provider::Claude | Provider::Agy => {
+                let five_hour = self
+                    .window(WindowKind::FiveHour)
+                    .map(|window| format!("5h {}%", format_percent(window.remaining_percent)))
+                    .unwrap_or_else(|| "5h N/A".to_string());
+                let weekly = self
+                    .window(WindowKind::Weekly)
+                    .map(|window| format!("week {}%", format_percent(window.remaining_percent)))
+                    .unwrap_or_else(|| "week N/A".to_string());
                 format!("{five_hour} · {weekly}")
             }
         }
@@ -137,7 +184,7 @@ impl ProviderSnapshot {
     pub fn severity(&self) -> Severity {
         let relevant = match self.provider {
             Provider::Codex | Provider::Grok => self.window(WindowKind::Weekly),
-            Provider::Claude => self
+            Provider::Claude | Provider::Agy => self
                 .window(WindowKind::FiveHour)
                 .or_else(|| self.window(WindowKind::Weekly)),
         };
@@ -165,6 +212,15 @@ impl Severity {
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "OK",
+            Self::Warning => "WARN",
+            Self::Danger => "LOW",
+            Self::Unknown => "N/A",
+        }
+    }
+
     pub fn from_remaining(remaining_percent: f64) -> Self {
         if remaining_percent > 30.0 {
             Self::Normal
@@ -180,6 +236,11 @@ impl Severity {
 pub struct MetadataTokens {
     pub quota_badge: String,
     pub quota_state: String,
+    pub quota_icon: String,
+    pub quota_provider: String,
+    pub quota_status: String,
+    pub quota_5h: String,
+    pub quota_week: String,
     pub quota_summary: String,
     pub quota_error: Option<String>,
 }
@@ -189,7 +250,12 @@ impl MetadataTokens {
         Self {
             quota_badge: snapshot.provider.badge().to_string(),
             quota_state: snapshot.severity().symbol().to_string(),
-            quota_summary: snapshot.summary(),
+            quota_icon: snapshot.provider.icon().to_string(),
+            quota_provider: snapshot.provider.display_name().to_string(),
+            quota_status: snapshot.severity().label().to_string(),
+            quota_5h: sidebar_window(snapshot, WindowKind::FiveHour),
+            quota_week: sidebar_window(snapshot, WindowKind::Weekly),
+            quota_summary: snapshot.sidebar_summary(),
             quota_error: None,
         }
     }
@@ -198,10 +264,31 @@ impl MetadataTokens {
         Self {
             quota_badge: provider.badge().to_string(),
             quota_state: Severity::Unknown.symbol().to_string(),
+            quota_icon: provider.icon().to_string(),
+            quota_provider: provider.display_name().to_string(),
+            quota_status: Severity::Unknown.label().to_string(),
+            quota_5h: match provider {
+                Provider::Claude | Provider::Agy => "5h N/A".to_string(),
+                Provider::Codex | Provider::Grok => String::new(),
+            },
+            quota_week: "week N/A".to_string(),
             quota_summary: "unavailable".to_string(),
             quota_error: Some(reason.into().chars().take(80).collect()),
         }
     }
+}
+
+fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind) -> String {
+    snapshot
+        .window(kind)
+        .map(|window| {
+            format!(
+                "{} {}%",
+                kind.label(),
+                format_percent(window.remaining_percent)
+            )
+        })
+        .unwrap_or_default()
 }
 
 pub fn format_percent(value: f64) -> String {
@@ -252,14 +339,32 @@ mod tests {
             ],
             1,
         );
-        assert_eq!(snapshot.summary(), "5h 42% left · wk 73% left");
+        assert_eq!(snapshot.summary(), "5h 42% left · week 73% left");
         assert!(!snapshot.summary().contains("2026"));
+    }
+
+    #[test]
+    fn sidebar_tokens_put_five_hour_before_weekly_value() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Claude,
+            vec![
+                window(WindowKind::FiveHour, 58.0),
+                window(WindowKind::Weekly, 27.0),
+            ],
+            1,
+        );
+        let tokens = MetadataTokens::from_snapshot(&snapshot);
+        assert_eq!(tokens.quota_5h, "5h 42%");
+        assert_eq!(tokens.quota_week, "week 73%");
     }
 
     #[test]
     fn provider_aliases_are_explicit() {
         assert_eq!("claude-code".parse::<Provider>().unwrap(), Provider::Claude);
+        assert_eq!("antigravity".parse::<Provider>().unwrap(), Provider::Agy);
         assert_eq!(Provider::Grok.badge(), "[X]");
+        assert_eq!(Provider::Codex.icon(), "◈C");
+        assert_eq!(Provider::Claude.icon(), "✦Cl");
     }
 
     #[test]

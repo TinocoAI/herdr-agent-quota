@@ -113,7 +113,7 @@ pub fn run_statusline_hook() -> Result<()> {
             if cache.save(&snapshot).is_ok() {
                 let panes = list_agent_panes().unwrap_or_default();
                 let tokens = [(Provider::Claude, MetadataTokens::from_snapshot(&snapshot))];
-                let _ = publish_tokens(&panes, &tokens, CacheStore::now_unix());
+                let _ = publish_tokens(&panes, &tokens, CacheStore::now_millis());
             }
         }
     }

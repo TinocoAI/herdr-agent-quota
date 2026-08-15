@@ -3,7 +3,16 @@ use std::fs;
 use std::path::PathBuf;
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
-const QUOTA_ROW_MARKER: &str = "$quota_badge";
+const QUOTA_ROW_MARKERS: [&str; 8] = [
+    "$quota_badge",
+    "$quota_state",
+    "$quota_icon",
+    "$quota_provider",
+    "$quota_status",
+    "$quota_summary",
+    "$quota_5h",
+    "$quota_week",
+];
 
 pub fn check() -> Result<()> {
     let path = config_path()?;
@@ -91,14 +100,21 @@ pub fn add_quota_row(input: &str) -> Result<String> {
     let rows = rows
         .as_array_mut()
         .context("Herdr ui.sidebar.agents.rows must be an array")?;
-    if rows.iter().any(row_contains_quota_marker) {
-        return Ok(document.to_string());
+    let mut updated_rows = Array::new();
+    for row in rows.iter() {
+        let cleaned = normalize_official_row(strip_quota_tokens(row));
+        if !cleaned.is_empty() {
+            updated_rows.push(Value::Array(cleaned));
+        }
     }
-    let mut row = Array::new();
-    row.push("$quota_badge");
-    row.push("$quota_state");
-    row.push("$quota_summary");
-    rows.push(Value::Array(row));
+
+    // If an older version replaced every row with quota-only rows, restore
+    // Herdr's official state/pane/tab row before adding our metadata.
+    if updated_rows.is_empty() {
+        updated_rows.push(Value::Array(default_state_row()));
+    }
+    append_quota_rows(&mut updated_rows);
+    *rows = updated_rows;
     Ok(document.to_string())
 }
 
@@ -124,8 +140,9 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
     };
     let mut retained = Array::new();
     for row in rows.iter() {
-        if !row_contains_quota_marker(row) {
-            retained.push(row.clone());
+        let cleaned = strip_quota_tokens(row);
+        if !cleaned.is_empty() {
+            retained.push(Value::Array(cleaned));
         }
     }
     agents["rows"] = Item::Value(Value::Array(retained));
@@ -144,19 +161,82 @@ fn ensure_table<'a>(document: &'a mut DocumentMut, path: &[&str]) -> Result<&'a 
         .context("Herdr config section is not a table")
 }
 
-fn row_contains_quota_marker(row: &Value) -> bool {
-    row.as_array()
-        .map(|items| {
-            items
-                .iter()
-                .any(|item| item.as_str() == Some(QUOTA_ROW_MARKER))
-        })
-        .unwrap_or(false)
+fn strip_quota_tokens(row: &Value) -> Array {
+    let mut cleaned = Array::new();
+    if let Some(items) = row.as_array() {
+        for item in items {
+            let is_quota_token = item
+                .as_str()
+                .is_some_and(|value| QUOTA_ROW_MARKERS.contains(&value));
+            if !is_quota_token {
+                cleaned.push(item.clone());
+            }
+        }
+    }
+    cleaned
+}
+
+fn default_state_row() -> Array {
+    let mut row = Array::new();
+    row.push("state_icon");
+    row.push("pane");
+    row.push("tab");
+    row
+}
+
+fn normalize_official_row(row: Array) -> Array {
+    let has_state_icon = row.iter().any(|item| item.as_str() == Some("state_icon"));
+    if !has_state_icon {
+        return row;
+    }
+    let mut normalized = Array::new();
+    let mut has_pane = false;
+    for item in row {
+        match item.as_str() {
+            Some("workspace") => {
+                if !has_pane {
+                    normalized.push("pane");
+                    has_pane = true;
+                }
+            }
+            Some("pane") => {
+                has_pane = true;
+                normalized.push(item);
+            }
+            _ => normalized.push(item),
+        }
+    }
+    normalized
+}
+
+fn append_quota_rows(rows: &mut Array) {
+    // Keep the official agent token on its existing row when possible. This
+    // makes the layout three lines without hiding Herdr's own metadata.
+    let agent_index = rows.iter().position(|row| {
+        row.as_array()
+            .is_some_and(|items| items.iter().any(|item| item.as_str() == Some("agent")))
+    });
+    if let Some(agent_row) =
+        agent_index.and_then(|index| rows.get_mut(index).and_then(Value::as_array_mut))
+    {
+        agent_row.push("$quota_icon");
+        agent_row.push("$quota_5h");
+    } else {
+        let mut agent_row = Array::new();
+        agent_row.push("agent");
+        agent_row.push("$quota_icon");
+        agent_row.push("$quota_5h");
+        rows.push(Value::Array(agent_row));
+    }
+
+    let mut weekly_row = Array::new();
+    weekly_row.push("$quota_week");
+    rows.push(Value::Array(weekly_row));
 }
 
 fn print_diff_hint() {
-    println!("  add one Agent row containing $quota_badge, $quota_state, $quota_summary");
-    println!("  existing Herdr rows remain unchanged");
+    println!("  keep Herdr's official state/pane/tab row (without the directory)");
+    println!("  add agent + provider mark + 5h, then a full-word week row");
 }
 
 #[cfg(test)]
@@ -164,23 +244,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adds_quota_row_without_replacing_existing_rows() {
+    fn adds_quota_rows_without_replacing_official_rows() {
         let original = r#"[ui.sidebar.agents]
 rows = [["state_icon", "agent"]]
 "#;
         let updated = add_quota_row(original).unwrap();
-        assert!(updated.contains("$quota_badge"));
+        assert!(updated.contains("$quota_icon"));
+        assert!(updated.contains("$quota_5h"));
+        assert!(updated.contains("$quota_week"));
         assert!(updated.contains("state_icon"));
+        assert!(updated.contains("agent"));
+        assert_eq!(updated.matches("[\"").count(), 2);
         assert_eq!(add_quota_row(&updated).unwrap(), updated);
     }
 
     #[test]
-    fn removes_only_plugin_owned_row() {
+    fn removes_plugin_tokens_but_keeps_the_official_agent_row() {
         let original = r#"[ui.sidebar.agents]
-rows = [["state_icon", "agent"], ["$quota_badge", "$quota_state", "$quota_summary"]]
+rows = [["state_icon", "pane", "tab"], ["agent", "$quota_icon", "$quota_5h"], ["$quota_week"]]
 "#;
         let updated = remove_quota_row(original).unwrap();
         assert!(updated.contains("state_icon"));
-        assert!(!updated.contains("$quota_badge"));
+        assert!(updated.contains("agent"));
+        assert!(!updated.contains("$quota_icon"));
+        assert!(!updated.contains("$quota_week"));
+    }
+
+    #[test]
+    fn migrates_old_quota_only_rows_and_restores_herdr_state_row() {
+        let original = r#"[ui.sidebar.agents]
+rows = [["$quota_provider", "$quota_status"], ["$quota_summary"]]
+"#;
+        let updated = add_quota_row(original).unwrap();
+        assert!(updated.contains("state_icon"));
+        assert!(updated.contains("$quota_icon"));
+        assert!(updated.contains("$quota_5h"));
+        assert!(updated.contains("$quota_week"));
+        assert_eq!(add_quota_row(&updated).unwrap(), updated);
     }
 }

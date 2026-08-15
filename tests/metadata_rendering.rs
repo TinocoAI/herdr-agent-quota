@@ -15,6 +15,6 @@ fn agent_row_is_compact_and_does_not_render_times() {
     );
     assert_eq!(
         render_provider(Provider::Grok, Some(&snapshot)),
-        "[X] ▲ wk 21% left"
+        "Grok WARN\r\n  week 21% left"
     );
 }

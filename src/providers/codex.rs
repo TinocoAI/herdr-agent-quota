@@ -228,7 +228,7 @@ mod tests {
             }}
         });
         let snapshot = parse_rate_limits(&value, 1).unwrap();
-        assert_eq!(snapshot.summary(), "wk 39% left");
+        assert_eq!(snapshot.summary(), "week 39% left");
         assert_eq!(
             snapshot
                 .window(WindowKind::Weekly)

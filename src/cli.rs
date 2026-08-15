@@ -33,6 +33,7 @@ pub enum Command {
         uninstall: bool,
     },
     ClaudeStatusline,
+    AgyStatusline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -41,6 +42,7 @@ pub enum ProviderSelection {
     Codex,
     Grok,
     Claude,
+    Agy,
 }
 
 impl ProviderSelection {
@@ -50,6 +52,7 @@ impl ProviderSelection {
             Self::Codex => vec![Provider::Codex],
             Self::Grok => vec![Provider::Grok],
             Self::Claude => vec![Provider::Claude],
+            Self::Agy => vec![Provider::Agy],
         }
     }
 }

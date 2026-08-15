@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="820" viewBox="0 0 1440 820">
+  <rect width="1440" height="820" fill="#0e1014"/>
+  <rect width="360" height="820" fill="#252933"/>
+  <rect x="360" width="2" height="820" fill="#48505e"/>
+  <g font-family="Menlo,Monaco,monospace">
+    <text x="28" y="55" fill="#e8edf7" font-size="21" font-weight="700">herdr</text>
+    <text x="116" y="52" fill="#53bfE6" font-size="14">agent quota</text>
+    <text x="28" y="120" fill="#e8edf7" font-size="14" font-weight="700">agents</text>
+    <text x="270" y="120" fill="#94a0b3" font-size="13">grouped</text>
+    <rect x="24" y="136" width="312" height="1" fill="#48505e"/>
+    <g>
+      <rect x="20" y="160" width="320" height="104" rx="6" fill="#1b1e25"/>
+      <text x="36" y="184" fill="#94a0b3" font-size="11">● oh-my-code · Owner</text>
+      <text x="36" y="210" fill="#e8edf7" font-size="15" font-weight="700">◈C  Codex</text>
+      <text x="36" y="238" fill="#94a0b3" font-size="13">week 86%</text>
+      <rect x="20" y="280" width="320" height="104" rx="6" fill="#1b1e25"/>
+      <text x="36" y="304" fill="#94a0b3" font-size="11">● oh-my-code · Owner</text>
+      <text x="36" y="330" fill="#e8edf7" font-size="15" font-weight="700">✕G  Grok</text>
+      <text x="36" y="358" fill="#94a0b3" font-size="13">week 21%</text>
+      <rect x="20" y="400" width="320" height="104" rx="6" fill="#1b1e25"/>
+      <text x="36" y="424" fill="#94a0b3" font-size="11">● oh-my-code · Owner</text>
+      <text x="36" y="450" fill="#e8edf7" font-size="15" font-weight="700">✦Cl  Claude · 5h 95%</text>
+      <text x="36" y="478" fill="#94a0b3" font-size="13">week 73%</text>
+      <rect x="20" y="520" width="320" height="104" rx="6" fill="#1b1e25"/>
+      <text x="36" y="544" fill="#94a0b3" font-size="11">● oh-my-code · Owner</text>
+      <text x="36" y="570" fill="#e8edf7" font-size="15" font-weight="700">△Ag  Agy · 5h 99.7%</text>
+      <text x="36" y="598" fill="#94a0b3" font-size="13">week 99.7%</text>
+    </g>
+    <text x="28" y="740" fill="#94a0b3" font-size="12">official row + 5h + week</text>
+    <text x="28" y="762" fill="#94a0b3" font-size="11">cached values · no timestamps</text>
+    <rect x="412" y="90" width="960" height="640" rx="8" fill="#13161b"/>
+    <text x="458" y="155" fill="#e8edf7" font-size="23" font-weight="700">Herdr Agent Quota</text>
+    <text x="458" y="190" fill="#94a0b3" font-size="14">Provider-aware windows · local cache · no resident process</text>
+    <rect x="458" y="212" width="868" height="1" fill="#48505e"/>
+    <g>
+      <rect x="458" y="236" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="236" width="7" height="84" rx="3" fill="#5cd18e"/>
+      <text x="486" y="274" fill="#e8edf7" font-size="17" font-weight="700">Codex</text><text x="620" y="274" fill="#94a0b3" font-size="13">ChatGPT subscription</text><text x="1030" y="274" fill="#94a0b3" font-size="12">week</text><text x="1160" y="274" fill="#5cd18e" font-size="14" font-weight="700">86% left</text>
+      <rect x="458" y="340" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="340" width="7" height="84" rx="3" fill="#f0ad40"/>
+      <text x="486" y="378" fill="#e8edf7" font-size="17" font-weight="700">Grok</text><text x="620" y="378" fill="#94a0b3" font-size="13">SuperGrok</text><text x="1030" y="378" fill="#94a0b3" font-size="12">week</text><text x="1160" y="378" fill="#f0ad40" font-size="14" font-weight="700">21% left</text>
+      <rect x="458" y="444" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="444" width="7" height="84" rx="3" fill="#5cd18e"/>
+      <text x="486" y="482" fill="#e8edf7" font-size="17" font-weight="700">Claude</text><text x="620" y="482" fill="#94a0b3" font-size="13">Claude Code</text><text x="1020" y="482" fill="#94a0b3" font-size="12">5h + weekly</text><text x="1160" y="482" fill="#5cd18e" font-size="14" font-weight="700">95% · 73% left</text>
+      <rect x="458" y="548" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="548" width="7" height="84" rx="3" fill="#5cd18e"/>
+      <text x="486" y="586" fill="#e8edf7" font-size="17" font-weight="700">Agy</text><text x="620" y="586" fill="#94a0b3" font-size="13">Antigravity</text><text x="1020" y="586" fill="#94a0b3" font-size="12">5h + weekly</text><text x="1160" y="586" fill="#5cd18e" font-size="14" font-weight="700">99.7% · 99.7%</text>
+    </g>
+    <text x="1182" y="782" fill="#778396" font-size="11">SANITIZED PREVIEW</text>
+  </g>
+</svg>

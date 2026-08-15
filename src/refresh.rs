@@ -16,7 +16,7 @@ pub struct ProviderOutcome {
 pub fn run(providers: &[Provider], force: bool, json: bool) -> Result<()> {
     let cache = CacheStore::from_env()?;
     let outcomes = cache.with_lock(|| refresh_locked(&cache, providers, force))?;
-    publish(&cache, providers, &outcomes)?;
+    publish(&cache, providers)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&outcomes)?);
     }
@@ -60,11 +60,17 @@ fn refresh_locked(
                     "Claude usage is collected by the Claude statusLine hook"
                 )),
             },
+            Provider::Agy => match cache.load(Provider::Agy)? {
+                Some(snapshot) => Ok(snapshot),
+                None => Err(anyhow::anyhow!(
+                    "Agy usage is collected by the Agy statusLine hook"
+                )),
+            },
         };
         cache.mark_refresh(*provider, now)?;
         match fetched {
             Ok(snapshot) => {
-                if *provider != Provider::Claude {
+                if !matches!(provider, Provider::Claude | Provider::Agy) {
                     cache.save(&snapshot)?;
                 }
                 outcomes.push(ProviderOutcome {
@@ -85,25 +91,22 @@ fn refresh_locked(
     Ok(outcomes)
 }
 
-fn publish(cache: &CacheStore, providers: &[Provider], outcomes: &[ProviderOutcome]) -> Result<()> {
+fn publish(cache: &CacheStore, providers: &[Provider]) -> Result<()> {
     let panes = list_agent_panes().unwrap_or_default();
     let mut tokens = Vec::new();
     for provider in providers {
         let snapshot = cache.load(*provider)?;
-        let error = outcomes
-            .iter()
-            .find(|outcome| outcome.provider == *provider)
-            .and_then(|outcome| outcome.error.clone());
-        let values = match snapshot {
-            Some(snapshot) => MetadataTokens::from_snapshot(&snapshot),
-            None => MetadataTokens::unavailable(
-                *provider,
-                error.unwrap_or_else(|| "no successful usage snapshot".to_string()),
-            ),
-        };
-        tokens.push((*provider, values));
+        if let Some(values) = tokens_for_provider(snapshot.as_ref()) {
+            tokens.push((*provider, values));
+        }
     }
-    publish_tokens(&panes, &tokens, CacheStore::now_unix())
+    publish_tokens(&panes, &tokens, CacheStore::now_millis())
+}
+
+fn tokens_for_provider(
+    snapshot: Option<&crate::model::ProviderSnapshot>,
+) -> Option<MetadataTokens> {
+    snapshot.map(MetadataTokens::from_snapshot)
 }
 
 #[cfg(test)]
@@ -123,5 +126,11 @@ mod tests {
         );
         cache.save(&snapshot).unwrap();
         assert_eq!(cache.load(Provider::Grok).unwrap(), Some(snapshot));
+    }
+
+    #[test]
+    fn missing_snapshot_does_not_overwrite_sidebar_with_unavailable() {
+        let values = tokens_for_provider(None);
+        assert!(values.is_none());
     }
 }

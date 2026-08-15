@@ -3,6 +3,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::process::Command;
 
+const METADATA_TTL_MS: &str = "86400000";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPane {
     pub pane_id: String,
@@ -87,8 +89,17 @@ pub fn publish_tokens(
                 "herdr-agent-quota",
             ])
             .args(["--seq", &sequence.to_string()])
+            .args(["--ttl-ms", METADATA_TTL_MS])
             .args(["--token", &format!("quota_badge={}", values.quota_badge)])
             .args(["--token", &format!("quota_state={}", values.quota_state)])
+            .args(["--token", &format!("quota_icon={}", values.quota_icon)])
+            .args([
+                "--token",
+                &format!("quota_provider={}", values.quota_provider),
+            ])
+            .args(["--token", &format!("quota_status={}", values.quota_status)])
+            .args(["--token", &format!("quota_5h={}", values.quota_5h)])
+            .args(["--token", &format!("quota_week={}", values.quota_week)])
             .args([
                 "--token",
                 &format!("quota_summary={}", values.quota_summary),

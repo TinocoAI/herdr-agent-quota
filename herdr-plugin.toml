@@ -2,7 +2,7 @@ id = "herdr-agent-quota"
 name = "Herdr Agent Quota"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
-description = "Live Claude Code, Codex, and Grok subscription quota labels for Herdr agent rows."
+description = "Live Claude Code, Codex, Grok, and Agy subscription quota labels for Herdr agent rows."
 platforms = ["macos", "linux"]
 
 [[build]]
