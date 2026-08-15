@@ -25,11 +25,14 @@ const QUOTA_ROW_MARKERS: [&str; 18] = [
 ];
 const ROW_GAP_MARKER: &str = "herdr-agent-quota";
 const PROVIDER_STYLE_MARKER: &str = "herdr-agent-quota-provider";
+const QUOTA_SAFE_COLOR: &str = "#84b084";
+const QUOTA_WARNING_COLOR: &str = "#cdaa65";
+const QUOTA_DANGER_COLOR: &str = "#ca6470";
 const PROVIDER_STYLES: [(&str, Option<&str>); 4] = [
-    ("claude", Some("#d97757")),
-    ("codex", Some("#53b8e8")),
-    ("grok", None),
-    ("agy", Some("#00b95c")),
+    ("claude", Some("#c47f6a")),
+    ("codex", Some("#7998b7")),
+    ("grok", Some("#acb4c3")),
+    ("agy", Some("#84b0af")),
 ];
 
 pub fn check() -> Result<()> {
@@ -399,19 +402,19 @@ fn append_quota_rows(rows: &mut Array) {
 fn append_window_rows(rows: &mut Array, base: &str) {
     rows.push(Value::Array(styled_row(
         &format!("${base}_normal"),
-        Some("#2e8b57"),
+        Some(QUOTA_SAFE_COLOR),
         Some(true),
         Some(false),
     )));
     rows.push(Value::Array(styled_row(
         &format!("${base}_warning"),
-        Some("#c47f00"),
+        Some(QUOTA_WARNING_COLOR),
         Some(true),
         Some(false),
     )));
     rows.push(Value::Array(styled_row(
         &format!("${base}_danger"),
-        Some("#d14343"),
+        Some(QUOTA_DANGER_COLOR),
         Some(true),
         Some(false),
     )));

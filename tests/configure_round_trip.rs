@@ -30,13 +30,14 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
     assert!(applied.contains("$quota_topic"));
     assert!(applied.contains("row_gap = 1 # herdr-agent-quota"));
     assert!(applied.find("$quota_topic").unwrap() < applied.find("$quota_5h_normal").unwrap());
-    assert!(applied.contains("fg = \"#2e8b57\""));
-    assert!(applied.contains("fg = \"#c47f00\""));
-    assert!(applied.contains("fg = \"#d14343\""));
+    assert!(applied.contains("fg = \"#84b084\""));
+    assert!(applied.contains("fg = \"#cdaa65\""));
+    assert!(applied.contains("fg = \"#ca6470\""));
     assert!(applied.contains("[ui.sidebar.agents.rows_by_agent]"));
-    assert!(applied.contains("fg = \"#d97757\""));
-    assert!(applied.contains("fg = \"#53b8e8\""));
-    assert!(applied.contains("fg = \"#00b95c\""));
+    assert!(applied.contains("fg = \"#c47f6a\""));
+    assert!(applied.contains("fg = \"#7998b7\""));
+    assert!(applied.contains("fg = \"#acb4c3\""));
+    assert!(applied.contains("fg = \"#84b0af\""));
 }
 
 #[test]

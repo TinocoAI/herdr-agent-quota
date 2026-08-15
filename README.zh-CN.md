@@ -59,9 +59,10 @@ herdr server reload-config
 - **红色** —— 健康度 `< 1` 且剩余额度低于 20%：额度不足且预计无法撑到重置。
 - **琥珀色兜底** —— reset 缺失或过期，不把无法判断的数据错误标成安全。
 
-截图中的 Claude 周额度虽然只剩 24%，但本周时间只剩约 13%，所以仍为绿色；
-Grok 周额度剩 20%，窗口时间却还剩约 69%，所以显示琥珀色。所有 provider
-共用同一套计算，适配器只负责提供窗口数据。
+截图中的 Claude 5 小时额度剩 89%，而窗口剩余时间略高于 89%，所以显示
+琥珀色；周额度虽然只剩 24%，但本周时间只剩约 13%，所以仍为绿色。Grok
+周额度只剩 17%，窗口时间却还剩约 69%，已经同时满足“续航不足且额度低于
+20%”，所以显示红色。所有 provider 共用同一套计算，适配器只负责提供窗口数据。
 
 ## 快速开始
 
@@ -142,20 +143,19 @@ row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
-  [{ token = "$quota_5h_normal", fg = "#2e8b57", bold = true, dim = false }],
-  [{ token = "$quota_5h_warning", fg = "#c47f00", bold = true, dim = false }],
-  [{ token = "$quota_5h_danger", fg = "#d14343", bold = true, dim = false }],
-  [{ token = "$quota_week_normal", fg = "#2e8b57", bold = true, dim = false }],
-  [{ token = "$quota_week_warning", fg = "#c47f00", bold = true, dim = false }],
-  [{ token = "$quota_week_danger", fg = "#d14343", bold = true, dim = false }],
+  [{ token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false }],
+  [{ token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false }],
+  [{ token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false }],
+  [{ token = "$quota_week_normal", fg = "#84b084", bold = true, dim = false }],
+  [{ token = "$quota_week_warning", fg = "#cdaa65", bold = true, dim = false }],
+  [{ token = "$quota_week_danger", fg = "#ca6470", bold = true, dim = false }],
 ]
 ```
 
 - `state_icon`、`tab` 是 Herdr 内置的状态和 plane 标签。
 - `$quota_provider` 是 `Claude`、`Codex`、`Grok` 或 `Agy`。
-- 默认 provider 名称使用易辨识的品牌色，并且不影响额度健康色：Claude
-  珊瑚橘、Codex 蓝、Grok 自适应黑白、Agy 使用 Antigravity 多色标志中的
-  绿色。Grok 继承主题前景色，因此深色主题显示白色、浅色主题显示黑色。
+- 默认 provider 名称使用易辨识的柔和品牌色，并且不影响额度健康色：
+  Claude 柔橘、Codex 粉彩蓝、Grok 柔白、Agy 使用 Antigravity 风格薄荷绿。
 - `$quota_topic` 放在额度上方，阅读顺序是 agent、当前任务、资源状态。
 - 每个窗口只发布一个样式 token。颜色按额度续航动态判断，不再使用固定
   余额阈值：将剩余额度比例与窗口剩余时间比例比较，额度消耗不快于时间
@@ -168,8 +168,8 @@ rows = [
   紧凑布局的自定义配置。
 
 Herdr 0.8 的样式只接受固定十六进制颜色，不支持跟随主题的语义色。
-默认的绿色、稍亮琥珀色和红色均采用中等亮度并加粗，在常见深色、浅色
-背景下都能保持区分度。
+默认的绿色、琥珀色和红色采用高明度柔和色阶并加粗，降低 Herdr 深色侧栏
+长时间阅读的视觉疲劳，同时保持状态辨识度。
 
 Provider 品牌样式通过 Herdr 静态 `rows_by_agent` 投影实现，额度健康色继续
 使用动态 metadata。两者相互独立，也不会为静态名称额外占用 metadata token
