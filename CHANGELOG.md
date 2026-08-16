@@ -42,6 +42,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `configure --apply` now binds `prefix+shift+r` to the force-refresh action
   when that key is free, while preserving an existing user-owned binding.
   `configure --uninstall` removes only the plugin action binding.
+- Grok turn completion now invokes a silent, provider-only refresh through its
+  official hook system. The refresh remains debounced to avoid request storms,
+  while manual refresh continues to bypass the debounce.
+- Quota-only refreshes no longer read every agent pane before publishing. They
+  preserve the last topic token, update the sidebar as soon as quota collection
+  finishes, and leave full topic extraction to agent lifecycle events.
 
 ### Changed
 

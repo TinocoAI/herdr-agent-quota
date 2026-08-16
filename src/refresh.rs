@@ -1,5 +1,5 @@
 use crate::cache::CacheStore;
-use crate::herdr::{list_agent_panes, publish_tokens};
+use crate::herdr::{list_agent_panes, list_agent_panes_with_topics, publish_tokens};
 use crate::model::Provider;
 use crate::presentation::MetadataTokens;
 use crate::providers::{codex, grok};
@@ -15,9 +15,21 @@ pub struct ProviderOutcome {
 }
 
 pub fn run(providers: &[Provider], force: bool, json: bool) -> Result<()> {
+    run_internal(providers, force, json, false)
+}
+
+fn run_internal(
+    providers: &[Provider],
+    force: bool,
+    json: bool,
+    refresh_topics: bool,
+) -> Result<()> {
     let cache = CacheStore::from_env()?;
     let outcomes = cache.with_lock(|| refresh_locked(&cache, providers, force))?;
-    publish(&cache, providers)?;
+    publish(&cache, providers, false)?;
+    if refresh_topics {
+        publish(&cache, providers, true)?;
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&outcomes)?);
     }
@@ -25,7 +37,7 @@ pub fn run(providers: &[Provider], force: bool, json: bool) -> Result<()> {
 }
 
 pub fn event() -> Result<()> {
-    run(&Provider::ALL, false, false)
+    run_internal(&Provider::ALL, false, false, true)
 }
 
 fn refresh_locked(
@@ -85,8 +97,13 @@ fn refresh_locked(
     Ok(outcomes)
 }
 
-fn publish(cache: &CacheStore, providers: &[Provider]) -> Result<()> {
-    let panes = list_agent_panes().unwrap_or_default();
+fn publish(cache: &CacheStore, providers: &[Provider], refresh_topics: bool) -> Result<()> {
+    let panes = if refresh_topics {
+        list_agent_panes_with_topics()
+    } else {
+        list_agent_panes()
+    }
+    .unwrap_or_default();
     let mut tokens = Vec::new();
     let now = CacheStore::now_unix();
     for provider in providers {

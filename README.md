@@ -107,7 +107,9 @@ Preview the changes without writing anything:
 The setup preserves Herdr's native state dot and plane/tab label. It only adds
 the provider, usage, and topic tokens, so the original Herdr agent indicator is
 not removed. `configure --uninstall` removes the plugin-owned row and restores
-the previous Claude statusLine.
+the previous Claude statusLine. It also installs a silent global Grok `Stop`
+hook that schedules a debounced quota sync after completed, failed, or cancelled
+turns; uninstall removes only that plugin-owned hook file.
 
 ## Supported CLIs
 
@@ -115,7 +117,7 @@ the previous Claude statusLine.
 | --- | --- | --- | --- |
 | Claude Code `2.1.233` | `5h` + `week` | Official `statusLine` JSON: `rate_limits.five_hour` and `seven_day` | `configure --apply` chains an existing `statusLine` command |
 | OpenAI Codex `0.147.0` | `week` | One-shot local `codex app-server --stdio`, `account/rateLimits/read` | ChatGPT subscription login; API-key mode is shown as unavailable |
-| Grok CLI / Grok Build `1.0.3` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Log in to Grok CLI; no xAI team/API billing is queried |
+| Grok CLI / Grok Build `1.0.4` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | `configure --apply` installs a silent per-turn refresh hook |
 | Agy / Antigravity CLI `1.1.13` | `5h` + `week` | Official `statusLine` JSON `quota` object (`gemini-*` and `3p-*` pools) | Set the native `/statusline` command once (below) |
 
 Versions above were checked on the development machine on 2026-08-15. The

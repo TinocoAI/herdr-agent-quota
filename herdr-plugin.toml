@@ -17,6 +17,11 @@ title = "Refresh agent quota"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider all --force"]
 
 [[actions]]
+id = "refresh-grok"
+title = "Sync Grok quota after turn"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider grok"]
+
+[[actions]]
 id = "configure"
 title = "Configure agent quota sidebar"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" configure --apply"]

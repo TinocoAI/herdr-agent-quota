@@ -12,8 +12,9 @@ fn install_herdr_stub(state: &Path, agent_list: &str) -> (PathBuf, PathBuf) {
     fs::write(
         &executable,
         format!(
-            "#!/bin/sh\nif [ \"$1 $2\" = \"agent list\" ]; then\n  printf '%s\\n' '{}'\nelif [ \"$1 $2\" = \"pane read\" ]; then\n  exit 0\nelif [ \"$1 $2\" = \"pane report-metadata\" ]; then\n  printf '%s\\n' \"$*\" >> '{}'\nfi\n",
+            "#!/bin/sh\nif [ \"$1 $2\" = \"agent list\" ]; then\n  printf '%s\\n' '{}'\nelif [ \"$1 $2\" = \"pane read\" ]; then\n  printf '%s\\n' \"$*\" >> '{}'\nelif [ \"$1 $2\" = \"pane report-metadata\" ]; then\n  printf '%s\\n' \"$*\" >> '{}'\nfi\n",
             agent_list,
+            log.display(),
             log.display()
         ),
     )
@@ -155,6 +156,7 @@ fn claude_cache_is_published_by_refresh_event() {
 
     run_claude_refresh(state.path(), &herdr_stub);
     let report = fs::read_to_string(herdr_log).unwrap();
+    assert!(!report.contains("pane read"));
     assert!(report.contains("quota_5h=5h 42% reset"));
     assert!(report.contains("quota_week=week 73% reset"));
 }

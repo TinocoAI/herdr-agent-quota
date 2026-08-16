@@ -47,6 +47,12 @@ pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
     collect_agent_panes(&value, &mut panes);
     panes.sort_by(|left, right| left.pane_id.cmp(&right.pane_id));
     panes.dedup_by(|left, right| left.pane_id == right.pane_id);
+    Ok(panes)
+}
+
+pub fn list_agent_panes_with_topics() -> Result<Vec<AgentPane>> {
+    let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+    let mut panes = list_agent_panes()?;
     for pane in &mut panes {
         pane.topic = read_pane_topic(&executable, pane).unwrap_or_default();
     }
@@ -72,7 +78,7 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
                 });
             if let (Some(pane_id), Some(kind)) = (pane_id, kind) {
                 if let Ok(provider) = kind.parse::<Provider>() {
-                    let tokens = map
+                    let tokens: BTreeMap<String, String> = map
                         .get("tokens")
                         .and_then(Value::as_object)
                         .into_iter()
@@ -83,13 +89,13 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
                                 .map(|value| (name.clone(), value.to_string()))
                         })
                         .collect();
+                    let topic = tokens.get("quota_topic").cloned().unwrap_or_default();
                     panes.push(AgentPane {
                         pane_id: pane_id.to_string(),
                         provider,
-                        // Native terminal titles often describe the agent's
-                        // current action (for example "Thinking"), not the
-                        // user's request. Topic text comes only from prompts.
-                        topic: String::new(),
+                        // Preserve the last published topic during quota-only
+                        // refreshes. Agent events refresh it from pane output.
+                        topic,
                         tokens,
                     });
                 }
@@ -340,6 +346,18 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn quota_only_discovery_preserves_the_last_published_topic() {
+        let value = json!({"result": {"agents": [{
+            "pane_id": "w1:p1",
+            "agent": "grok",
+            "tokens": {"quota_topic": "latest task"}
+        }]}});
+        let mut panes = Vec::new();
+        collect_agent_panes(&value, &mut panes);
+        assert_eq!(panes[0].topic, "latest task");
     }
 
     #[test]
