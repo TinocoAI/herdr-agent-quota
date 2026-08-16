@@ -25,8 +25,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   interaction. Existing custom status lines are still chained unchanged.
 - A pane that exits between `herdr agent list` and the metadata report no
   longer aborts the whole publish, so the remaining live panes still update.
-  This was reachable in normal use, because `pane.exited` itself triggers a
-  publish.
 - Closed a race in the Codex app-server watchdog that could signal an unrelated
   process after the child had been reaped and its pid recycled. The watchdog
   and the request thread now share the child and terminate it at most once.
@@ -36,15 +34,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an agent's own status line cannot synchronously call back into Herdr or move
   the terminal viewport. Metadata reports are skipped when every displayed
   token is unchanged.
-- Focus changes no longer trigger quota collection, which prevents returning to
-  a pane from moving its terminal viewport. External quota resets are still
-  picked up by agent lifecycle events or the **Refresh agent quota** action.
+- Focus changes now use a dedicated provider-only, 60-second-debounced refresh.
+  This path never reads pane content or refreshes topics, and metadata writes
+  remain suppressed while the selected pane is in scrollback.
+- Agent detection and status events now refresh and read topics only for the
+  affected provider. Pane exit no longer starts a refresh after its metadata
+  consumer is already gone; incomplete event payloads still fall back to all
+  providers.
 - `configure --apply` now binds `prefix+shift+r` to the force-refresh action
   when that key is free, while preserving an existing user-owned binding.
   `configure --uninstall` removes only the plugin action binding.
-- Grok turn completion now invokes a silent, provider-only refresh through its
-  official hook system. The refresh remains debounced to avoid request storms,
-  while manual refresh continues to bypass the debounce.
+- Grok now invokes a silent, provider-only refresh directly from `PostToolUse`
+  during long-running turns, with turn-end hooks covering final, failed, and
+  cancelled replies. It no longer routes these refreshes through a Herdr action,
+  and remains debounced to avoid request storms.
 - Quota-only refreshes no longer read every agent pane before publishing. They
   preserve the last topic token, update the sidebar as soon as quota collection
   finishes, and leave full topic extraction to agent lifecycle events.
@@ -55,6 +58,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in one pass and reload Herdr automatically. They also repair legacy
   collectors that pointed at a different cache directory while preserving any
   previous user statusLine backup.
+- Metadata publication now skips panes whose viewport is in scrollback, so a
+  Herdr repaint cannot pull the user back to the bottom. The next refresh after
+  returning to the bottom catches the sidebar up.
 
 ### Changed
 

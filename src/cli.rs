@@ -23,6 +23,7 @@ pub enum Command {
         json: bool,
     },
     Event,
+    Focus,
     Dashboard,
     Configure {
         #[arg(long, conflicts_with_all = ["apply", "uninstall"])]

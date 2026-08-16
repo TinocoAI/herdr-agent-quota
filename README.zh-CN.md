@@ -75,9 +75,13 @@ herdr plugin action invoke herdr-agent-quota.configure
 
 以上就是完整配置流程。第一条命令构建并启用插件；第二个 action 会统一使用
 Herdr 的插件 state 目录，批量写入 sidebar 行、安装或修复可恢复的 Claude/Agy
-statusLine 采集器、安装 Grok turn hook，并自动 reload 配置。之后可随时在 Herdr
+statusLine 采集器、安装 Grok 回复 hook，并自动 reload 配置。之后可随时在 Herdr
 action 菜单执行 **Install / repair agent quota**，重复执行也是安全的。需要手动
 刷新时执行 **Refresh agent quota**。
+
+选中一个 pane 时也会触发该 provider 的额度刷新，60 秒内自动合并重复请求。
+这条路径不会读取终端内容；如果 pane 正在查看 scrollback，则暂缓 metadata
+写入，回到底部后再补上，避免刷新把 viewport 拉走。
 
 只查看配置变更、不写入文件：
 
@@ -106,7 +110,7 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会
 | --- | --- | --- | --- |
 | Claude Code `2.1.233` | `5h` + `week` | 官方 `statusLine` JSON：`rate_limits.five_hour`、`seven_day` | 配置 action 自动安装并串联原命令 |
 | OpenAI Codex `0.147.0` | `week` | 一次性的 `codex app-server --stdio`，调用 `account/rateLimits/read` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用 |
-| Grok CLI / Grok Build `1.0.3` | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 登录 Grok CLI；不会读取 xAI team/API 账单 |
+| Grok CLI / Grok Build `1.0.4` | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 配置 action 安装运行中与回合结束 hook |
 | Agy / Antigravity CLI `1.1.13` | `5h` + `week` | 官方 `statusLine` JSON 的 `quota`（`gemini-*`、`3p-*`） | 配置 action 自动安装并串联原命令 |
 
 上面的版本是 2026-08-15 在开发机上实际检查的版本。解析器按照供应商的
@@ -194,7 +198,9 @@ Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 
   ChatGPT 订阅额度。
 - **Grok：** 在内存中读取本地 `~/.grok/auth.json` 登录 key，访问 Grok CLI
   使用的周额度接口。只有明确标记为 weekly 的响应才会接受。这是
-  SuperGrok 订阅额度，不是 xAI 开发者/API team 账单。
+  SuperGrok 订阅额度，不是 xAI 开发者/API team 账单。`PostToolUse` 会在
+  长任务的工具调用之间刷新，`Stop`/`StopFailure`/`StopCancelled` 覆盖最终、
+  失败和取消的回复；hook 直接运行采集器，不经过 Herdr action。
 - **Claude Code：** 使用官方
   [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline) 提供
   5 小时和 7 天额度。原有 statusLine 会被备份、串联，并可由
@@ -219,6 +225,7 @@ Grok CLI 的额度接口属于 CLI 内部契约，不是 xAI 面向开发者的�
 | Claude 或 Agy 显示 `N/A` | 发起一次对话，让原生 `statusLine` 产生 JSON，然后刷新。 |
 | 切换 pane 时 Claude 短暂变化 | 已有缓存会保留；如果还没有快照，发送一次 prompt 或手动刷新。 |
 | Agy 没有额度 | 执行 **Install / repair agent quota**，完成一次 Agy 对话后再手动刷新。 |
+| 运行中的 Grok goal 额度不更新 | 执行 **Install / repair agent quota** 后重启一次该 Grok session，让它加载新的全局 hook。 |
 | 话题为空或没有更新 | 在该 pane 发送 prompt；话题提取依赖 agent 事件和最近输出。 |
 | 原有 Claude statusLine 没有被修改 | 执行 `configure --check`；对于不能安全串联的配置，插件会拒绝覆盖。 |
 

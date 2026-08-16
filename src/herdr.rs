@@ -50,9 +50,32 @@ pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
     Ok(panes)
 }
 
-pub fn list_agent_panes_with_topics() -> Result<Vec<AgentPane>> {
+pub fn current_agent_provider() -> Result<Option<Provider>> {
+    if let Some(agent) = std::env::var_os("HERDR_FOCUSED_PANE_AGENT") {
+        if let Ok(provider) = agent.to_string_lossy().parse::<Provider>() {
+            return Ok(Some(provider));
+        }
+    }
+    let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+    let output = Command::new(executable)
+        .args(["pane", "current"])
+        .output()
+        .context("read focused Herdr pane")?;
+    if !output.status.success() {
+        anyhow::bail!("Herdr pane current failed with {}", output.status);
+    }
+    let value: Value =
+        serde_json::from_slice(&output.stdout).context("parse focused Herdr pane")?;
+    Ok(value
+        .pointer("/result/pane/agent")
+        .and_then(Value::as_str)
+        .and_then(|agent| agent.parse::<Provider>().ok()))
+}
+
+pub fn list_agent_panes_with_topics(providers: &[Provider]) -> Result<Vec<AgentPane>> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut panes = list_agent_panes()?;
+    panes.retain(|pane| providers.contains(&pane.provider));
     for pane in &mut panes {
         pane.topic = read_pane_topic(&executable, pane).unwrap_or_default();
     }
@@ -133,6 +156,12 @@ pub fn publish_tokens(
         if metadata_matches(&pane.tokens, &desired) {
             continue;
         }
+        // Herdr versions that repaint metadata can snap a terminal viewport
+        // back to the bottom. Never mutate pane metadata while the user is
+        // reading scrollback; the next refresh after they return catches up.
+        if pane_is_scrolled(&executable, &pane.pane_id) {
+            continue;
+        }
         reported += 1;
         let mut command = Command::new(&executable);
         command
@@ -167,6 +196,26 @@ pub fn publish_tokens(
         );
     }
     Ok(())
+}
+
+fn pane_is_scrolled(executable: &std::ffi::OsStr, pane_id: &str) -> bool {
+    let Ok(output) = Command::new(executable)
+        .args(["pane", "get", pane_id])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    serde_json::from_slice::<Value>(&output.stdout)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/result/pane/scroll/offset_from_bottom")
+                .and_then(Value::as_u64)
+        })
+        .is_some_and(|offset| offset > 0)
 }
 
 fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, String> {

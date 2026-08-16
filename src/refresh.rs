@@ -1,10 +1,13 @@
 use crate::cache::CacheStore;
-use crate::herdr::{list_agent_panes, list_agent_panes_with_topics, publish_tokens};
+use crate::herdr::{
+    current_agent_provider, list_agent_panes, list_agent_panes_with_topics, publish_tokens,
+};
 use crate::model::Provider;
 use crate::presentation::MetadataTokens;
 use crate::providers::{codex, grok};
 use anyhow::Result;
 use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, Serialize)]
 pub struct ProviderOutcome {
@@ -37,7 +40,17 @@ fn run_internal(
 }
 
 pub fn event() -> Result<()> {
-    run_internal(&Provider::ALL, false, false, true)
+    let providers = event_provider()
+        .map(|provider| vec![provider])
+        .unwrap_or_else(|| Provider::ALL.to_vec());
+    run_internal(&providers, false, false, true)
+}
+
+pub fn focus() -> Result<()> {
+    let Some(provider) = current_agent_provider()? else {
+        return Ok(());
+    };
+    run(&[provider], false, false)
 }
 
 fn refresh_locked(
@@ -99,7 +112,7 @@ fn refresh_locked(
 
 fn publish(cache: &CacheStore, providers: &[Provider], refresh_topics: bool) -> Result<()> {
     let panes = if refresh_topics {
-        list_agent_panes_with_topics()
+        list_agent_panes_with_topics(providers)
     } else {
         list_agent_panes()
     }
@@ -113,6 +126,23 @@ fn publish(cache: &CacheStore, providers: &[Provider], refresh_topics: bool) -> 
         }
     }
     publish_tokens(&panes, &tokens, CacheStore::now_millis())
+}
+
+fn event_provider() -> Option<Provider> {
+    let input = std::env::var("HERDR_PLUGIN_EVENT_JSON").ok()?;
+    let value: Value = serde_json::from_str(&input).ok()?;
+    find_agent(&value).and_then(|agent| agent.parse::<Provider>().ok())
+}
+
+fn find_agent(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(map) => map
+            .get("agent")
+            .and_then(Value::as_str)
+            .or_else(|| map.values().find_map(find_agent)),
+        Value::Array(values) => values.iter().find_map(find_agent),
+        _ => None,
+    }
 }
 
 fn tokens_for_provider(

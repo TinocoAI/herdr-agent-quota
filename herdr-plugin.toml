@@ -17,11 +17,6 @@ title = "Refresh agent quota"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider all --force"]
 
 [[actions]]
-id = "refresh-grok"
-title = "Sync Grok quota after turn"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider grok"]
-
-[[actions]]
 id = "configure"
 title = "Install / repair agent quota"
 command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" configure --apply && herdr server reload-config"]
@@ -42,9 +37,9 @@ on = "pane.agent_status_changed"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" event"]
 
 [[events]]
-id = "agent-quota-exit-refresh"
-on = "pane.exited"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" event"]
+id = "focused-agent-quota-refresh"
+on = "pane.focused"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" focus"]
 
 [[panes]]
 id = "dashboard"

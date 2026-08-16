@@ -1,7 +1,12 @@
 #[test]
-fn pane_focus_does_not_refresh_or_disturb_the_viewport() {
+fn pane_focus_uses_the_quota_only_focus_path() {
     let manifest = include_str!("../herdr-plugin.toml");
-    assert!(!manifest.contains("on = \"pane.focused\""));
+    let hook = manifest
+        .split("[[events]]")
+        .find(|event| event.contains("on = \"pane.focused\""))
+        .unwrap();
+    assert!(hook.contains(" focus\"]"));
+    assert!(!hook.contains(" event\"]"));
 }
 
 #[test]
@@ -11,4 +16,16 @@ fn plugin_exposes_one_click_configure_and_uninstall_actions() {
     assert!(manifest.contains("configure --apply"));
     assert!(manifest.contains("id = \"uninstall\""));
     assert!(manifest.contains("configure --uninstall"));
+}
+
+#[test]
+fn grok_runtime_refresh_does_not_go_through_a_plugin_action() {
+    let manifest = include_str!("../herdr-plugin.toml");
+    assert!(!manifest.contains("id = \"refresh-grok\""));
+}
+
+#[test]
+fn exited_panes_do_not_trigger_a_quota_refresh() {
+    let manifest = include_str!("../herdr-plugin.toml");
+    assert!(!manifest.contains("on = \"pane.exited\""));
 }
