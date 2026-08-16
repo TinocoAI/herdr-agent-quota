@@ -1,5 +1,7 @@
 use herdr_agent_quota::configure::herdr::{add_quota_row, remove_quota_row};
+use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 use tempfile::tempdir;
 
@@ -72,4 +74,43 @@ fn claude_collector_is_silent_without_a_previous_statusline() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn claude_collector_publishes_fresh_quota_to_herdr() {
+    let state = tempdir().unwrap();
+    let herdr_log = state.path().join("herdr.log");
+    let herdr_stub = state.path().join("herdr");
+    fs::write(
+        &herdr_stub,
+        format!(
+            "#!/bin/sh\nif [ \"$1 $2\" = \"agent list\" ]; then\n  printf '%s\\n' '{{\"result\":{{\"agents\":[{{\"agent\":\"claude\",\"pane_id\":\"w1:p1\"}}]}}}}'\nelif [ \"$1 $2\" = \"pane read\" ]; then\n  exit 0\nelif [ \"$1 $2\" = \"pane report-metadata\" ]; then\n  printf '%s\\n' \"$*\" >> '{}'\nfi\n",
+            herdr_log.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&herdr_stub).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&herdr_stub, permissions).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+        .arg("claude-statusline")
+        .env("HERDR_PLUGIN_STATE_DIR", state.path())
+        .env("HERDR_BIN_PATH", &herdr_stub)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(include_bytes!("fixtures/claude/statusline-both.json"))
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+
+    let report = fs::read_to_string(herdr_log).unwrap();
+    assert!(report.contains("quota_5h=5h 42% reset"));
+    assert!(report.contains("quota_week=week 73% reset"));
 }

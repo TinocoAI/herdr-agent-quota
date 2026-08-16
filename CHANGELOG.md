@@ -32,9 +32,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the request thread now share the child and terminate it at most once.
 - A failed cache rename no longer leaves its scratch file behind.
 
-- Removed the `pane.focused` refresh subscription and all Herdr calls from the
-  Claude statusLine hook. Together they could create a focus/metadata feedback
-  loop that repeatedly repainted and scrolled Claude panes under Herdr 0.8.
+- Removed the `pane.focused` refresh subscription, which could create a
+  focus/metadata feedback loop that repeatedly repainted and scrolled Claude
+  panes under Herdr 0.8. The Claude statusLine hook now republishes fresh quota
+  metadata through a 30-second marker so the sidebar does not stay blank.
 
 ### Changed
 
