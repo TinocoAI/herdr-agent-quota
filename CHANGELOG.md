@@ -48,6 +48,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Quota-only refreshes no longer read every agent pane before publishing. They
   preserve the last topic token, update the sidebar as soon as quota collection
   finishes, and leave full topic extraction to agent lifecycle events.
+- Agy's statusLine collector is now installed, repaired, chained, and removed
+  by the same configuration lifecycle as Claude's, and remains silent when no
+  user-owned status line existed.
+- Configuration actions now install or uninstall all plugin-owned integrations
+  in one pass and reload Herdr automatically. They also repair legacy
+  collectors that pointed at a different cache directory while preserving any
+  previous user statusLine backup.
 
 ### Changed
 

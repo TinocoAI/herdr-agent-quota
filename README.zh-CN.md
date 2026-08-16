@@ -30,14 +30,13 @@ Codex、Grok 显示周额度；每张 agent 卡片的话题来自用户最后一
   也不会写入或刷新凭证。
 - **不会给你错的数** —— 刷新失败时保留上一次的有效数值，而不是闪成
   `unavailable`；API key 登录也不会被当成订阅额度显示。
-- **完全可回滚** —— 一条命令装好，一条命令原样还原你的配置。
+- **完全可回滚** —— 一个 action 装好，一个 action 原样还原你的配置。
 
-三条命令即可安装（[快速开始](#快速开始)）：
+链接插件后，用一个 action 批量安装所有可恢复的集成（[快速开始](#快速开始)）：
 
 ```sh
-herdr plugin link .
-./target/release/herdr-agent-quota configure --apply
-herdr server reload-config
+herdr plugin link . --enabled
+herdr plugin action invoke herdr-agent-quota.configure
 ```
 
 截图是真实的 Herdr 本地会话。其中的额度和话题来自当时的会话，
@@ -70,18 +69,15 @@ herdr server reload-config
 CLI。在仓库目录执行：
 
 ```sh
-herdr plugin link .
-./target/release/herdr-agent-quota configure --apply
-herdr server reload-config
+herdr plugin link . --enabled
+herdr plugin action invoke herdr-agent-quota.configure
 ```
 
-以上就是完整的 Herdr 配置流程：
-
-- `herdr plugin link .` 构建 Rust 二进制并注册启动/事件钩子。
-- `configure --apply` 幂等地写入按额度窗口分行的 sidebar 配置，并安装可恢复的
-  Claude Code `statusLine` 包装器。
-- 也可以在 Herdr action 菜单中执行 **Configure agent quota sidebar**。
-- 需要手动刷新时执行 **Refresh agent quota**。
+以上就是完整配置流程。第一条命令构建并启用插件；第二个 action 会统一使用
+Herdr 的插件 state 目录，批量写入 sidebar 行、安装或修复可恢复的 Claude/Agy
+statusLine 采集器、安装 Grok turn hook，并自动 reload 配置。之后可随时在 Herdr
+action 菜单执行 **Install / repair agent quota**，重复执行也是安全的。需要手动
+刷新时执行 **Refresh agent quota**。
 
 只查看配置变更、不写入文件：
 
@@ -89,19 +85,29 @@ herdr server reload-config
 ./target/release/herdr-agent-quota configure --check
 ```
 
+要一次撤销所有插件配置并恢复原来的 Claude/Agy statusLine，可在 action 菜单
+执行 **Uninstall agent quota configuration**，或运行：
+
+```sh
+herdr plugin action invoke herdr-agent-quota.uninstall
+```
+
+action 完成后，如需连插件注册也删除，再执行
+`herdr plugin unlink herdr-agent-quota`。写配置刻意只通过插件 action 进行，
+避免采集器写到另一份缓存目录。
+
 插件会保留 Herdr 原生的状态圆点和 plane/tab 提示，只追加 provider、
-usage、topic 三类 token，不会覆盖官方 agent 指示。执行
-`configure --uninstall` 可以删除插件添加的行，并恢复原来的 Claude
-`statusLine`。
+usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会删除插件
+添加的行，并恢复原来的 Claude/Agy `statusLine`。
 
 ## 支持的 CLI
 
 | CLI | 侧栏显示 | 本地数据来源 | 额外配置 |
 | --- | --- | --- | --- |
-| Claude Code `2.1.233` | `5h` + `week` | 官方 `statusLine` JSON：`rate_limits.five_hour`、`seven_day` | `configure --apply` 会串联已有 `statusLine` 命令 |
+| Claude Code `2.1.233` | `5h` + `week` | 官方 `statusLine` JSON：`rate_limits.five_hour`、`seven_day` | 配置 action 自动安装并串联原命令 |
 | OpenAI Codex `0.147.0` | `week` | 一次性的 `codex app-server --stdio`，调用 `account/rateLimits/read` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用 |
 | Grok CLI / Grok Build `1.0.3` | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 登录 Grok CLI；不会读取 xAI team/API 账单 |
-| Agy / Antigravity CLI `1.1.13` | `5h` + `week` | 官方 `statusLine` JSON 的 `quota`（`gemini-*`、`3p-*`） | 需要一次性设置原生 `/statusline` 命令 |
+| Agy / Antigravity CLI `1.1.13` | `5h` + `week` | 官方 `statusLine` JSON 的 `quota`（`gemini-*`、`3p-*`） | 配置 action 自动安装并串联原命令 |
 
 上面的版本是 2026-08-15 在开发机上实际检查的版本。解析器按照供应商的
 字段工作，不会把这些版本号写死；兼容的新版本可以继续使用。
@@ -121,17 +127,13 @@ Codex 和 Grok 提供周额度；Claude Code 和 Agy 提供 5 小时额度与周
 刷新失败时，插件会保留上一次成功的缓存值，不会把旧值清空为
 `unavailable`。从未成功采集过的 provider 才会显示 `N/A`。
 
-## Agy / Antigravity 配置
+## Agy / Antigravity 采集
 
-Agy 通过原生的一次性 `statusLine` hook 把额度 JSON 传给插件。在 Agy 中
-设置一次：
-
-```text
-/statusline /absolute/path/to/herdr-agent-quota/target/release/herdr-agent-quota agy-statusline
-```
-
-该 hook 从 stdin 读取 JSON，只把脱敏后的百分比写入本地插件缓存，然后退出。
-它不是常驻进程，也不使用浏览器 Cookie 或私有 API。
+Agy 通过原生的一次性 `statusLine` hook 把额度 JSON 传给插件。配置 action
+会自动安装它；如果用户原来已有 statusLine 命令，会先备份并串联，卸载时恢复。
+插件自己的采集器不输出任何 status-line 文本，只从 stdin 读取 JSON，把脱敏后的
+百分比写入本地插件缓存，然后退出。它不是常驻进程，也不使用浏览器 Cookie 或
+私有 API。
 
 ## 侧栏布局
 
@@ -196,7 +198,7 @@ Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 
 - **Claude Code：** 使用官方
   [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline) 提供
   5 小时和 7 天额度。原有 statusLine 会被备份、串联，并可由
-  `configure --uninstall` 恢复。
+  卸载 action 恢复。
 - **Agy/Antigravity：** 使用官方
   [`/usage` 和 statusline 文档](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
   中的 Gemini 和第三方额度池。两个额度池同时存在时，取较低的剩余百分比，
@@ -216,7 +218,7 @@ Grok CLI 的额度接口属于 CLI 内部契约，不是 xAI 面向开发者的�
 | 侧栏没有新增行 | 执行 `herdr server reload-config`，再运行 **Refresh agent quota**。 |
 | Claude 或 Agy 显示 `N/A` | 发起一次对话，让原生 `statusLine` 产生 JSON，然后刷新。 |
 | 切换 pane 时 Claude 短暂变化 | 已有缓存会保留；如果还没有快照，发送一次 prompt 或手动刷新。 |
-| Agy 没有额度 | 确认原生 `/statusline` 命令指向编译好的 `agy-statusline` hook。 |
+| Agy 没有额度 | 执行 **Install / repair agent quota**，完成一次 Agy 对话后再手动刷新。 |
 | 话题为空或没有更新 | 在该 pane 发送 prompt；话题提取依赖 agent 事件和最近输出。 |
 | 原有 Claude statusLine 没有被修改 | 执行 `configure --check`；对于不能安全串联的配置，插件会拒绝覆盖。 |
 

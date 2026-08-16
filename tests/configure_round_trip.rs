@@ -141,6 +141,27 @@ fn claude_collector_is_silent_without_a_previous_statusline() {
 }
 
 #[test]
+fn agy_collector_is_silent_without_a_previous_statusline() {
+    let state = tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+        .arg("agy-statusline")
+        .env("HERDR_PLUGIN_STATE_DIR", state.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(include_bytes!("fixtures/agy/statusline-both.json"))
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn claude_cache_is_published_by_refresh_event() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(

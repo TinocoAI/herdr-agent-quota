@@ -14,8 +14,10 @@ Useful context when judging impact:
 - **Reads** `~/.grok/auth.json` (login key only), Claude Code and Agy
   statusLine JSON on stdin, and the local `codex app-server` JSON-RPC socket.
 - **Writes** sanitized percentages to Herdr's plugin state directory,
-  `~/.config/herdr/config.toml`, and `~/.claude/settings.json`. The last two
-  are backed up and restored by `configure --uninstall`.
+  `~/.config/herdr/config.toml`, `~/.claude/settings.json`,
+  `~/.gemini/antigravity-cli/settings.json`, and one plugin-owned file under
+  `~/.grok/hooks`. User-owned statusLine values are backed up and restored by
+  the uninstall action; the Grok hook file is never shared with user content.
 - **Sends** one authenticated request to the Grok CLI billing endpoint. This is
   the only outbound network call in the project. No usage data is uploaded
   anywhere.
