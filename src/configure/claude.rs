@@ -109,8 +109,8 @@ pub fn run_statusline_hook() -> Result<()> {
     let snapshot = run_statusline(&input).ok();
     if let Some(snapshot) = &snapshot {
         if let Ok(cache) = CacheStore::from_env() {
-            // Keep the statusLine hook local and fast. Calling Herdr from this
-            // hook can feed pane events back into Claude while it is painting.
+            // Keep this hook local and fast while Claude is painting its
+            // status line. Herdr events publish the cached snapshot.
             let _ = cache.save(snapshot);
         }
     }
