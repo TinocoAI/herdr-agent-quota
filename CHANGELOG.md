@@ -36,10 +36,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an agent's own status line cannot synchronously call back into Herdr or move
   the terminal viewport. Metadata reports are skipped when every displayed
   token is unchanged.
-- Restored a debounced `pane.focused` refresh after making metadata publication
-  idempotent. Returning from a browser reset now refetches Grok and Codex and
-  republishes changed Claude/Agy snapshots without recreating the old feedback
-  loop.
+- Focus changes no longer trigger quota collection, which prevents returning to
+  a pane from moving its terminal viewport. External quota resets are still
+  picked up by agent lifecycle events or the **Refresh agent quota** action.
 
 ### Changed
 
