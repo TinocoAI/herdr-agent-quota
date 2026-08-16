@@ -2,15 +2,35 @@ use crate::model::Provider;
 use crate::presentation::MetadataTokens;
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::process::Command;
 
 const METADATA_TTL_MS: &str = "86400000";
+const METADATA_TOKEN_NAMES: [&str; 16] = [
+    "quota_badge",
+    "quota_state",
+    "quota_icon",
+    "quota_provider",
+    "quota_status",
+    "quota_summary",
+    "quota_5h",
+    "quota_5h_normal",
+    "quota_5h_warning",
+    "quota_5h_danger",
+    "quota_week",
+    "quota_week_normal",
+    "quota_week_warning",
+    "quota_week_danger",
+    "quota_topic",
+    "quota_error",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPane {
     pub pane_id: String,
     pub provider: Provider,
     pub topic: String,
+    pub tokens: BTreeMap<String, String>,
 }
 
 pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
@@ -52,6 +72,17 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
                 });
             if let (Some(pane_id), Some(kind)) = (pane_id, kind) {
                 if let Ok(provider) = kind.parse::<Provider>() {
+                    let tokens = map
+                        .get("tokens")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flat_map(|tokens| tokens.iter())
+                        .filter_map(|(name, value)| {
+                            value
+                                .as_str()
+                                .map(|value| (name.clone(), value.to_string()))
+                        })
+                        .collect();
                     panes.push(AgentPane {
                         pane_id: pane_id.to_string(),
                         provider,
@@ -59,6 +90,7 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
                         // current action (for example "Thinking"), not the
                         // user's request. Topic text comes only from prompts.
                         topic: String::new(),
+                        tokens,
                     });
                 }
             }
@@ -90,9 +122,13 @@ pub fn publish_tokens(
         else {
             continue;
         };
+        let topic = truncate_topic(&pane.topic);
+        let desired = desired_tokens(values, &topic);
+        if metadata_matches(&pane.tokens, &desired) {
+            continue;
+        }
         reported += 1;
         let mut command = Command::new(&executable);
-        let topic = truncate_topic(&pane.topic);
         command
             .args([
                 "pane",
@@ -102,38 +138,13 @@ pub fn publish_tokens(
                 "herdr-agent-quota",
             ])
             .args(["--seq", &sequence.to_string()])
-            .args(["--ttl-ms", METADATA_TTL_MS])
-            .args(["--token", &format!("quota_badge={}", values.quota_badge)])
-            .args(["--token", &format!("quota_state={}", values.quota_state)])
-            .args(["--token", &format!("quota_icon={}", values.quota_icon)])
-            .args([
-                "--token",
-                &format!("quota_provider={}", values.quota_provider),
-            ])
-            .args(["--token", &format!("quota_status={}", values.quota_status)])
-            .args([
-                "--token",
-                &format!("quota_summary={}", values.quota_summary),
-            ]);
-        set_optional_token(&mut command, "quota_5h", &values.quota_5h);
-        set_severity_token(
-            &mut command,
-            "quota_5h",
-            &values.quota_5h,
-            values.quota_5h_severity,
-        );
-        set_optional_token(&mut command, "quota_week", &values.quota_week);
-        set_severity_token(
-            &mut command,
-            "quota_week",
-            &values.quota_week,
-            values.quota_week_severity,
-        );
-        set_optional_token(&mut command, "quota_topic", &topic);
-        if let Some(error) = &values.quota_error {
-            command.args(["--token", &format!("quota_error={error}")]);
-        } else {
-            command.args(["--clear-token", "quota_error"]);
+            .args(["--ttl-ms", METADATA_TTL_MS]);
+        for name in METADATA_TOKEN_NAMES {
+            if let Some(value) = desired.get(name) {
+                command.args(["--token", &format!("{name}={value}")]);
+            } else {
+                command.args(["--clear-token", name]);
+            }
         }
         let output = command.output().context("report quota metadata to Herdr")?;
         if !output.status.success() {
@@ -152,33 +163,70 @@ pub fn publish_tokens(
     Ok(())
 }
 
-fn set_severity_token(
-    command: &mut Command,
+fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, String> {
+    let mut tokens = BTreeMap::from([
+        ("quota_badge".to_string(), values.quota_badge.clone()),
+        ("quota_state".to_string(), values.quota_state.clone()),
+        ("quota_icon".to_string(), values.quota_icon.clone()),
+        ("quota_provider".to_string(), values.quota_provider.clone()),
+        ("quota_status".to_string(), values.quota_status.clone()),
+        ("quota_summary".to_string(), values.quota_summary.clone()),
+    ]);
+    insert_optional_token(&mut tokens, "quota_5h", &values.quota_5h);
+    insert_severity_token(
+        &mut tokens,
+        "quota_5h",
+        &values.quota_5h,
+        values.quota_5h_severity,
+    );
+    insert_optional_token(&mut tokens, "quota_week", &values.quota_week);
+    insert_severity_token(
+        &mut tokens,
+        "quota_week",
+        &values.quota_week,
+        values.quota_week_severity,
+    );
+    insert_optional_token(&mut tokens, "quota_topic", topic);
+    if let Some(error) = &values.quota_error {
+        tokens.insert("quota_error".to_string(), error.clone());
+    }
+    tokens
+}
+
+fn metadata_matches(
+    current: &BTreeMap<String, String>,
+    desired: &BTreeMap<String, String>,
+) -> bool {
+    METADATA_TOKEN_NAMES
+        .into_iter()
+        .all(|name| current.get(name) == desired.get(name))
+}
+
+fn insert_severity_token(
+    tokens: &mut BTreeMap<String, String>,
     base: &str,
     value: &str,
     severity: Option<crate::model::Severity>,
 ) {
-    let variants = ["normal", "warning", "danger"];
-    for variant in variants {
-        command.args(["--clear-token", &format!("{base}_{variant}")]);
-    }
     if value.trim().is_empty() {
         return;
     }
-    let variant = match severity.unwrap_or(crate::model::Severity::Unknown) {
+    let variant = severity_variant(severity);
+    tokens.insert(format!("{base}_{variant}"), value.to_string());
+}
+
+fn severity_variant(severity: Option<crate::model::Severity>) -> &'static str {
+    match severity.unwrap_or(crate::model::Severity::Unknown) {
         crate::model::Severity::Warning => "warning",
         crate::model::Severity::Danger => "danger",
         crate::model::Severity::Normal => "normal",
         crate::model::Severity::Unknown => "warning",
-    };
-    command.args(["--token", &format!("{base}_{variant}={value}")]);
+    }
 }
 
-fn set_optional_token(command: &mut Command, name: &str, value: &str) {
-    if value.trim().is_empty() {
-        command.args(["--clear-token", name]);
-    } else {
-        command.args(["--token", &format!("{name}={value}")]);
+fn insert_optional_token(tokens: &mut BTreeMap<String, String>, name: &str, value: &str) {
+    if !value.trim().is_empty() {
+        tokens.insert(name.to_string(), value.to_string());
     }
 }
 
@@ -282,11 +330,13 @@ mod tests {
                     pane_id: "w1:p1".to_string(),
                     provider: Provider::Codex,
                     topic: String::new(),
+                    tokens: BTreeMap::new(),
                 },
                 AgentPane {
                     pane_id: "w1:p2".to_string(),
                     provider: Provider::Claude,
                     topic: String::new(),
+                    tokens: BTreeMap::new(),
                 },
             ]
         );
@@ -318,23 +368,19 @@ mod tests {
 
     #[test]
     fn publishes_exactly_one_styled_variant_for_each_window() {
-        let mut command = Command::new("herdr");
-        set_severity_token(
-            &mut command,
+        let mut tokens = BTreeMap::new();
+        insert_severity_token(
+            &mut tokens,
             "quota_week",
             "week 25% reset 2d3h",
             Some(crate::model::Severity::Warning),
         );
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert!(args.contains(&"quota_week_normal".to_string()));
-        assert!(args.contains(&"quota_week_warning".to_string()));
-        assert!(args.contains(&"quota_week_danger".to_string()));
-        assert!(args.contains(&"quota_week_warning=week 25% reset 2d3h".to_string()));
-        assert!(!args.iter().any(|arg| arg.starts_with("quota_week_normal=")));
-        assert!(!args.iter().any(|arg| arg.starts_with("quota_week_danger=")));
+        assert_eq!(
+            tokens.get("quota_week_warning").map(String::as_str),
+            Some("week 25% reset 2d3h")
+        );
+        assert!(!tokens.contains_key("quota_week_normal"));
+        assert!(!tokens.contains_key("quota_week_danger"));
     }
 
     #[test]

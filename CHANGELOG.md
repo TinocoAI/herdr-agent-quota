@@ -32,10 +32,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the request thread now share the child and terminate it at most once.
 - A failed cache rename no longer leaves its scratch file behind.
 
-- Removed the `pane.focused` refresh subscription, which could create a
-  focus/metadata feedback loop that repeatedly repainted and scrolled Claude
-  panes under Herdr 0.8. The Claude statusLine hook now republishes fresh quota
-  metadata through a 30-second marker so the sidebar does not stay blank.
+- Claude and Agy statusLine hooks now only update the local cache, so repainting
+  an agent's own status line cannot synchronously call back into Herdr or move
+  the terminal viewport. Metadata reports are skipped when every displayed
+  token is unchanged.
+- Restored a debounced `pane.focused` refresh after making metadata publication
+  idempotent. Returning from a browser reset now refetches Grok and Codex and
+  republishes changed Claude/Agy snapshots without recreating the old feedback
+  loop.
 
 ### Changed
 
