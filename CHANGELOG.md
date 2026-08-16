@@ -39,6 +39,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Focus changes no longer trigger quota collection, which prevents returning to
   a pane from moving its terminal viewport. External quota resets are still
   picked up by agent lifecycle events or the **Refresh agent quota** action.
+- `configure --apply` now binds `prefix+shift+r` to the force-refresh action
+  when that key is free, while preserving an existing user-owned binding.
+  `configure --uninstall` removes only the plugin action binding.
 
 ### Changed
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 const QUOTA_ROW_MARKERS: [&str; 18] = [
     "$quota_badge",
@@ -25,6 +25,8 @@ const QUOTA_ROW_MARKERS: [&str; 18] = [
 ];
 const ROW_GAP_MARKER: &str = "herdr-agent-quota";
 const PROVIDER_STYLE_MARKER: &str = "herdr-agent-quota-provider";
+const REFRESH_KEY: &str = "prefix+shift+r";
+const REFRESH_ACTION: &str = "herdr-agent-quota.refresh";
 const QUOTA_SAFE_COLOR: &str = "#84b084";
 const QUOTA_WARNING_COLOR: &str = "#cdaa65";
 const QUOTA_DANGER_COLOR: &str = "#ca6470";
@@ -116,6 +118,7 @@ pub fn add_quota_row(input: &str) -> Result<String> {
             .parse::<DocumentMut>()
             .context("parse Herdr TOML config")?
     };
+    add_refresh_keybinding(&mut document)?;
     let agents = ensure_table(&mut document, &["ui", "sidebar", "agents"])?;
     if !agents.contains_key("row_gap") {
         let mut row_gap = Value::from(1);
@@ -155,6 +158,7 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
     let mut document = input
         .parse::<DocumentMut>()
         .context("parse Herdr TOML config")?;
+    remove_refresh_keybinding(&mut document);
     let Some(agents) = document
         .get_mut("ui")
         .and_then(Item::as_table_mut)
@@ -163,7 +167,7 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
         .and_then(|sidebar| sidebar.get_mut("agents"))
         .and_then(Item::as_table_mut)
     else {
-        return Ok(input.to_string());
+        return Ok(document.to_string());
     };
     remove_managed_provider_rows(agents);
     if let Some(rows) = agents.get_mut("rows").and_then(Item::as_array_mut) {
@@ -194,6 +198,61 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
         agents.remove("row_gap");
     }
     Ok(document.to_string())
+}
+
+fn add_refresh_keybinding(document: &mut DocumentMut) -> Result<()> {
+    let keys = ensure_table(document, &["keys"])?;
+    let commands = keys
+        .entry("command")
+        .or_insert(Item::ArrayOfTables(ArrayOfTables::new()))
+        .as_array_of_tables_mut()
+        .context("Herdr keys.command must be an array of tables")?;
+    if commands
+        .iter()
+        .any(|command| command.get("command").and_then(Item::as_str) == Some(REFRESH_ACTION))
+        || commands
+            .iter()
+            .any(|command| command.get("key").and_then(Item::as_str) == Some(REFRESH_KEY))
+    {
+        return Ok(());
+    }
+
+    let mut command = Table::new();
+    command.insert("key", Item::Value(Value::from(REFRESH_KEY)));
+    command.insert("type", Item::Value(Value::from("plugin_action")));
+    command.insert("command", Item::Value(Value::from(REFRESH_ACTION)));
+    command.insert(
+        "description",
+        Item::Value(Value::from("refresh all agent quotas")),
+    );
+    commands.push(command);
+    Ok(())
+}
+
+fn remove_refresh_keybinding(document: &mut DocumentMut) {
+    let Some(keys) = document.get_mut("keys").and_then(Item::as_table_mut) else {
+        return;
+    };
+    let Some(commands) = keys
+        .get_mut("command")
+        .and_then(Item::as_array_of_tables_mut)
+    else {
+        return;
+    };
+    let mut retained = ArrayOfTables::new();
+    for command in commands.iter() {
+        if command.get("command").and_then(Item::as_str) != Some(REFRESH_ACTION) {
+            retained.push(command.clone());
+        }
+    }
+    if retained.is_empty() {
+        keys.remove("command");
+    } else {
+        keys["command"] = Item::ArrayOfTables(retained);
+    }
+    if keys.is_empty() {
+        document.remove("keys");
+    }
 }
 
 fn ensure_table<'a>(document: &'a mut DocumentMut, path: &[&str]) -> Result<&'a mut Table> {
