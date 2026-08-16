@@ -17,9 +17,19 @@ title = "Refresh agent quota"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider all --force"]
 
 [[actions]]
+id = "refresh-grok"
+title = "Sync Grok quota after turn"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider grok"]
+
+[[actions]]
 id = "configure"
-title = "Configure agent quota sidebar"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" configure --apply"]
+title = "Install / repair agent quota"
+command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" configure --apply && herdr server reload-config"]
+
+[[actions]]
+id = "uninstall"
+title = "Uninstall agent quota configuration"
+command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" configure --uninstall && herdr server reload-config"]
 
 [[events]]
 id = "agent-quota-refresh"
