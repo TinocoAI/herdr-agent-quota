@@ -23,3 +23,9 @@ fn grok_runtime_refresh_does_not_go_through_a_plugin_action() {
     let manifest = include_str!("../herdr-plugin.toml");
     assert!(!manifest.contains("id = \"refresh-grok\""));
 }
+
+#[test]
+fn exited_panes_do_not_trigger_a_quota_refresh() {
+    let manifest = include_str!("../herdr-plugin.toml");
+    assert!(!manifest.contains("on = \"pane.exited\""));
+}

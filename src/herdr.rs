@@ -72,9 +72,10 @@ pub fn current_agent_provider() -> Result<Option<Provider>> {
         .and_then(|agent| agent.parse::<Provider>().ok()))
 }
 
-pub fn list_agent_panes_with_topics() -> Result<Vec<AgentPane>> {
+pub fn list_agent_panes_with_topics(providers: &[Provider]) -> Result<Vec<AgentPane>> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut panes = list_agent_panes()?;
+    panes.retain(|pane| providers.contains(&pane.provider));
     for pane in &mut panes {
         pane.topic = read_pane_topic(&executable, pane).unwrap_or_default();
     }

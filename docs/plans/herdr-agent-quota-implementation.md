@@ -200,7 +200,9 @@ herdr-agent-quota agy-statusline
 Declare one-shot startup and event hooks in `herdr-plugin.toml`:
 
 - Startup: `refresh --provider all`.
-- Events: `pane.agent_detected`, `pane.agent_status_changed`, and `pane.exited`.
+- Events: `pane.agent_detected` and `pane.agent_status_changed`; refresh and read
+  topics only for the provider named by the event, falling back to all providers
+  when the event payload does not identify one.
 - Focus: refresh only the selected provider, without reading pane content.
 - Manual action: force refresh all providers.
 

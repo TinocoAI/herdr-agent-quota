@@ -25,8 +25,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   interaction. Existing custom status lines are still chained unchanged.
 - A pane that exits between `herdr agent list` and the metadata report no
   longer aborts the whole publish, so the remaining live panes still update.
-  This was reachable in normal use, because `pane.exited` itself triggers a
-  publish.
 - Closed a race in the Codex app-server watchdog that could signal an unrelated
   process after the child had been reaped and its pid recycled. The watchdog
   and the request thread now share the child and terminate it at most once.
@@ -39,6 +37,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Focus changes now use a dedicated provider-only, 60-second-debounced refresh.
   This path never reads pane content or refreshes topics, and metadata writes
   remain suppressed while the selected pane is in scrollback.
+- Agent detection and status events now refresh and read topics only for the
+  affected provider. Pane exit no longer starts a refresh after its metadata
+  consumer is already gone; incomplete event payloads still fall back to all
+  providers.
 - `configure --apply` now binds `prefix+shift+r` to the force-refresh action
   when that key is free, while preserving an existing user-owned binding.
   `configure --uninstall` removes only the plugin action binding.
