@@ -1,5 +1,5 @@
 #[test]
-fn pane_focus_refreshes_quota_that_changed_outside_herdr() {
+fn pane_focus_does_not_refresh_or_disturb_the_viewport() {
     let manifest = include_str!("../herdr-plugin.toml");
-    assert_eq!(manifest.matches("on = \"pane.focused\"").count(), 1);
+    assert!(!manifest.contains("on = \"pane.focused\""));
 }
