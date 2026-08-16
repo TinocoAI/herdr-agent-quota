@@ -183,6 +183,36 @@ fn claude_cache_is_published_by_refresh_event() {
 }
 
 #[test]
+fn quota_refresh_does_not_report_metadata_to_a_scrolled_pane() {
+    let state = tempdir().unwrap();
+    let log = state.path().join("herdr.log");
+    let herdr = state.path().join("herdr");
+    fs::write(
+        &herdr,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1 $2\" = \"agent list\" ]; then\n  printf '%s\\n' '{}'\nelif [ \"$1 $2\" = \"pane get\" ]; then\n  printf '%s\\n' '{}'\nfi\n",
+            log.display(),
+            r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1"}]}}"#,
+            r#"{"result":{"pane":{"scroll":{"offset_from_bottom":12}}}}"#,
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&herdr).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&herdr, permissions).unwrap();
+
+    run_claude_collector(
+        state.path(),
+        &herdr,
+        include_bytes!("fixtures/claude/statusline-both.json"),
+    );
+    run_claude_refresh(state.path(), &herdr);
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.contains("pane get w1:p1"));
+    assert!(!calls.contains("pane report-metadata"));
+}
+
+#[test]
 fn claude_collector_does_not_republish_unchanged_quota() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(

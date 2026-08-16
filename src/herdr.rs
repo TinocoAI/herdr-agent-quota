@@ -133,6 +133,12 @@ pub fn publish_tokens(
         if metadata_matches(&pane.tokens, &desired) {
             continue;
         }
+        // Herdr versions that repaint metadata can snap a terminal viewport
+        // back to the bottom. Never mutate pane metadata while the user is
+        // reading scrollback; the next refresh after they return catches up.
+        if pane_is_scrolled(&executable, &pane.pane_id) {
+            continue;
+        }
         reported += 1;
         let mut command = Command::new(&executable);
         command
@@ -167,6 +173,26 @@ pub fn publish_tokens(
         );
     }
     Ok(())
+}
+
+fn pane_is_scrolled(executable: &std::ffi::OsStr, pane_id: &str) -> bool {
+    let Ok(output) = Command::new(executable)
+        .args(["pane", "get", pane_id])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    serde_json::from_slice::<Value>(&output.stdout)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/result/pane/scroll/offset_from_bottom")
+                .and_then(Value::as_u64)
+        })
+        .is_some_and(|offset| offset > 0)
 }
 
 fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, String> {

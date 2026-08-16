@@ -12,3 +12,9 @@ fn plugin_exposes_one_click_configure_and_uninstall_actions() {
     assert!(manifest.contains("id = \"uninstall\""));
     assert!(manifest.contains("configure --uninstall"));
 }
+
+#[test]
+fn grok_runtime_refresh_does_not_go_through_a_plugin_action() {
+    let manifest = include_str!("../herdr-plugin.toml");
+    assert!(!manifest.contains("id = \"refresh-grok\""));
+}

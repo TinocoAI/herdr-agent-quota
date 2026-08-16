@@ -42,9 +42,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `configure --apply` now binds `prefix+shift+r` to the force-refresh action
   when that key is free, while preserving an existing user-owned binding.
   `configure --uninstall` removes only the plugin action binding.
-- Grok turn completion now invokes a silent, provider-only refresh through its
-  official hook system. The refresh remains debounced to avoid request storms,
-  while manual refresh continues to bypass the debounce.
+- Grok now invokes a silent, provider-only refresh directly from `PostToolUse`
+  during long-running turns, with turn-end hooks covering final, failed, and
+  cancelled replies. It no longer routes these refreshes through a Herdr action,
+  and remains debounced to avoid request storms.
 - Quota-only refreshes no longer read every agent pane before publishing. They
   preserve the last topic token, update the sidebar as soon as quota collection
   finishes, and leave full topic extraction to agent lifecycle events.
@@ -55,6 +56,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in one pass and reload Herdr automatically. They also repair legacy
   collectors that pointed at a different cache directory while preserving any
   previous user statusLine backup.
+- Metadata publication now skips panes whose viewport is in scrollback, so a
+  Herdr repaint cannot pull the user back to the bottom. The next refresh after
+  returning to the bottom catches the sidebar up.
 
 ### Changed
 
