@@ -50,6 +50,28 @@ pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
     Ok(panes)
 }
 
+pub fn current_agent_provider() -> Result<Option<Provider>> {
+    if let Some(agent) = std::env::var_os("HERDR_FOCUSED_PANE_AGENT") {
+        if let Ok(provider) = agent.to_string_lossy().parse::<Provider>() {
+            return Ok(Some(provider));
+        }
+    }
+    let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+    let output = Command::new(executable)
+        .args(["pane", "current"])
+        .output()
+        .context("read focused Herdr pane")?;
+    if !output.status.success() {
+        anyhow::bail!("Herdr pane current failed with {}", output.status);
+    }
+    let value: Value =
+        serde_json::from_slice(&output.stdout).context("parse focused Herdr pane")?;
+    Ok(value
+        .pointer("/result/pane/agent")
+        .and_then(Value::as_str)
+        .and_then(|agent| agent.parse::<Provider>().ok()))
+}
+
 pub fn list_agent_panes_with_topics() -> Result<Vec<AgentPane>> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut panes = list_agent_panes()?;

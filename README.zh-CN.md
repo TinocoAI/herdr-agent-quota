@@ -79,6 +79,10 @@ statusLine 采集器、安装 Grok 回复 hook，并自动 reload 配置。之�
 action 菜单执行 **Install / repair agent quota**，重复执行也是安全的。需要手动
 刷新时执行 **Refresh agent quota**。
 
+选中一个 pane 时也会触发该 provider 的额度刷新，60 秒内自动合并重复请求。
+这条路径不会读取终端内容；如果 pane 正在查看 scrollback，则暂缓 metadata
+写入，回到底部后再补上，避免刷新把 viewport 拉走。
+
 只查看配置变更、不写入文件：
 
 ```sh

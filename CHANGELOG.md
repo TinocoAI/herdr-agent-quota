@@ -36,9 +36,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an agent's own status line cannot synchronously call back into Herdr or move
   the terminal viewport. Metadata reports are skipped when every displayed
   token is unchanged.
-- Focus changes no longer trigger quota collection, which prevents returning to
-  a pane from moving its terminal viewport. External quota resets are still
-  picked up by agent lifecycle events or the **Refresh agent quota** action.
+- Focus changes now use a dedicated provider-only, 60-second-debounced refresh.
+  This path never reads pane content or refreshes topics, and metadata writes
+  remain suppressed while the selected pane is in scrollback.
 - `configure --apply` now binds `prefix+shift+r` to the force-refresh action
   when that key is free, while preserving an existing user-owned binding.
   `configure --uninstall` removes only the plugin action binding.

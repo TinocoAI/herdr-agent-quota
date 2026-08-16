@@ -97,6 +97,9 @@ herdr plugin action invoke herdr-agent-quota.refresh
 
 Herdr plugin v1 does not currently let plugins add buttons to the native agent
 group header, so the shortcut is the closest stable one-step entry point.
+Selecting a pane also runs a provider-only refresh, debounced to once per
+minute. That path does not read terminal content, and a pane currently viewing
+scrollback receives no metadata write until it returns to the bottom.
 
 Preview the changes without writing anything:
 

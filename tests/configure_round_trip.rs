@@ -213,6 +213,44 @@ fn quota_refresh_does_not_report_metadata_to_a_scrolled_pane() {
 }
 
 #[test]
+fn focus_refreshes_only_the_selected_provider_without_reading_the_pane() {
+    let state = tempdir().unwrap();
+    let log = state.path().join("herdr.log");
+    let herdr = state.path().join("herdr");
+    fs::write(
+        &herdr,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1 $2\" = \"pane current\" ]; then\n  printf '%s\\n' '{}'\nelif [ \"$1 $2\" = \"agent list\" ]; then\n  printf '%s\\n' '{}'\nelif [ \"$1 $2\" = \"pane get\" ]; then\n  printf '%s\\n' '{}'\nfi\n",
+            log.display(),
+            r#"{"result":{"pane":{"agent":"claude","pane_id":"w1:p1"}}}"#,
+            r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1"}]}}"#,
+            r#"{"result":{"pane":{"scroll":{"offset_from_bottom":0}}}}"#,
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&herdr).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&herdr, permissions).unwrap();
+    run_claude_collector(
+        state.path(),
+        &herdr,
+        include_bytes!("fixtures/claude/statusline-both.json"),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr-agent-quota"))
+        .arg("focus")
+        .env("HERDR_PLUGIN_STATE_DIR", state.path())
+        .env("HERDR_BIN_PATH", &herdr)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.contains("pane current"));
+    assert!(!calls.contains("pane read"));
+    assert!(calls.contains("pane report-metadata w1:p1"));
+}
+
+#[test]
 fn claude_collector_does_not_republish_unchanged_quota() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(

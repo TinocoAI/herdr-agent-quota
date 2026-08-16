@@ -41,6 +41,11 @@ id = "agent-quota-exit-refresh"
 on = "pane.exited"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" event"]
 
+[[events]]
+id = "focused-agent-quota-refresh"
+on = "pane.focused"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" focus"]
+
 [[panes]]
 id = "dashboard"
 title = "Agent quota"

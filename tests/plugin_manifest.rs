@@ -1,7 +1,12 @@
 #[test]
-fn pane_focus_does_not_refresh_or_disturb_the_viewport() {
+fn pane_focus_uses_the_quota_only_focus_path() {
     let manifest = include_str!("../herdr-plugin.toml");
-    assert!(!manifest.contains("on = \"pane.focused\""));
+    let hook = manifest
+        .split("[[events]]")
+        .find(|event| event.contains("on = \"pane.focused\""))
+        .unwrap();
+    assert!(hook.contains(" focus\"]"));
+    assert!(!hook.contains(" event\"]"));
 }
 
 #[test]

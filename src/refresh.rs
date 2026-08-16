@@ -1,5 +1,7 @@
 use crate::cache::CacheStore;
-use crate::herdr::{list_agent_panes, list_agent_panes_with_topics, publish_tokens};
+use crate::herdr::{
+    current_agent_provider, list_agent_panes, list_agent_panes_with_topics, publish_tokens,
+};
 use crate::model::Provider;
 use crate::presentation::MetadataTokens;
 use crate::providers::{codex, grok};
@@ -38,6 +40,13 @@ fn run_internal(
 
 pub fn event() -> Result<()> {
     run_internal(&Provider::ALL, false, false, true)
+}
+
+pub fn focus() -> Result<()> {
+    let Some(provider) = current_agent_provider()? else {
+        return Ok(());
+    };
+    run(&[provider], false, false)
 }
 
 fn refresh_locked(

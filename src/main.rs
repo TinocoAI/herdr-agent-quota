@@ -11,6 +11,7 @@ fn main() -> Result<()> {
             json,
         } => herdr_agent_quota::refresh::run(&provider.providers(), force, json),
         Command::Event => herdr_agent_quota::refresh::event(),
+        Command::Focus => herdr_agent_quota::refresh::focus(),
         Command::Dashboard => herdr_agent_quota::dashboard::run(),
         Command::Configure {
             check,
