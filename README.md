@@ -86,7 +86,17 @@ That is the complete Herdr setup. `herdr plugin link .` builds the Rust binary
 and registers the startup/event hooks. `configure --apply` makes an idempotent
 per-window sidebar edit and installs a reversible Claude Code `statusLine`
 wrapper. You can run the same setup from Herdr's action menu with **Configure
-agent quota sidebar**. Use **Refresh agent quota** for a one-shot refresh.
+agent quota sidebar**. Use **Refresh agent quota** for a one-shot refresh, or
+press `prefix+shift+r` after configuration. The shortcut force-fetches Codex
+and Grok, then republishes the latest Claude and Agy statusLine snapshots. Run
+the same action from a shell with:
+
+```sh
+herdr plugin action invoke herdr-agent-quota.refresh
+```
+
+Herdr plugin v1 does not currently let plugins add buttons to the native agent
+group header, so the shortcut is the closest stable one-step entry point.
 
 Preview the changes without writing anything:
 

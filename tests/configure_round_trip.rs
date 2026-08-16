@@ -51,7 +51,28 @@ fn run_claude_refresh(state: &Path, herdr: &Path) {
 fn sidebar_configuration_is_idempotent_and_reversible() {
     let original = "[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n";
     let applied = add_quota_row(original).unwrap();
+    assert!(applied.contains("key = \"prefix+shift+r\""));
+    assert!(applied.contains("type = \"plugin_action\""));
+    assert!(applied.contains("command = \"herdr-agent-quota.refresh\""));
     assert_eq!(add_quota_row(&applied).unwrap(), applied);
+    assert_eq!(remove_quota_row(&applied).unwrap(), original);
+}
+
+#[test]
+fn sidebar_configuration_preserves_a_conflicting_refresh_key() {
+    let original = concat!(
+        "[[keys.command]]\n",
+        "key = \"prefix+shift+r\"\n",
+        "type = \"shell\"\n",
+        "command = \"echo user-owned\"\n",
+        "description = \"user refresh\"\n\n",
+        "[ui.sidebar.agents]\n",
+        "rows = [[\"state_icon\", \"agent\"]]\n"
+    );
+    let applied = add_quota_row(original).unwrap();
+    assert_eq!(applied.matches("key = \"prefix+shift+r\"").count(), 1);
+    assert!(applied.contains("command = \"echo user-owned\""));
+    assert!(!applied.contains("command = \"herdr-agent-quota.refresh\""));
     assert_eq!(remove_quota_row(&applied).unwrap(), original);
 }
 
