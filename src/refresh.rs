@@ -1,7 +1,5 @@
 use crate::cache::CacheStore;
-use crate::herdr::{
-    current_agent_provider, list_agent_panes, list_agent_panes_with_topics, publish_tokens,
-};
+use crate::herdr::{current_agent_provider, list_agent_panes, publish_tokens, refresh_pane_topic};
 use crate::model::Provider;
 use crate::presentation::MetadataTokens;
 use crate::providers::{codex, grok};
@@ -18,21 +16,18 @@ pub struct ProviderOutcome {
 }
 
 pub fn run(providers: &[Provider], force: bool, json: bool) -> Result<()> {
-    run_internal(providers, force, json, false)
+    run_internal(providers, force, json, None)
 }
 
 fn run_internal(
     providers: &[Provider],
     force: bool,
     json: bool,
-    refresh_topics: bool,
+    topic_pane: Option<&str>,
 ) -> Result<()> {
     let cache = CacheStore::from_env()?;
     let outcomes = cache.with_lock(|| refresh_locked(&cache, providers, force))?;
-    publish(&cache, providers, false)?;
-    if refresh_topics {
-        publish(&cache, providers, true)?;
-    }
+    publish(&cache, providers, topic_pane)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&outcomes)?);
     }
@@ -40,10 +35,15 @@ fn run_internal(
 }
 
 pub fn event() -> Result<()> {
-    let providers = event_provider()
+    let event = event_json();
+    let providers = event
+        .as_ref()
+        .and_then(find_agent)
+        .and_then(|agent| agent.parse::<Provider>().ok())
         .map(|provider| vec![provider])
         .unwrap_or_else(|| Provider::ALL.to_vec());
-    run_internal(&providers, false, false, true)
+    let topic_pane = event.as_ref().and_then(find_pane_id);
+    run_internal(&providers, false, false, topic_pane)
 }
 
 pub fn focus() -> Result<()> {
@@ -110,13 +110,15 @@ fn refresh_locked(
     Ok(outcomes)
 }
 
-fn publish(cache: &CacheStore, providers: &[Provider], refresh_topics: bool) -> Result<()> {
-    let panes = if refresh_topics {
-        list_agent_panes_with_topics(providers)
-    } else {
-        list_agent_panes()
+fn publish(cache: &CacheStore, providers: &[Provider], topic_pane: Option<&str>) -> Result<()> {
+    let mut panes = list_agent_panes().unwrap_or_default();
+    if let Some(pane) = topic_pane.and_then(|pane_id| {
+        panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == pane_id && providers.contains(&pane.provider))
+    }) {
+        refresh_pane_topic(pane);
     }
-    .unwrap_or_default();
     let mut tokens = Vec::new();
     let now = CacheStore::now_unix();
     for provider in providers {
@@ -128,21 +130,30 @@ fn publish(cache: &CacheStore, providers: &[Provider], refresh_topics: bool) -> 
     publish_tokens(&panes, &tokens, CacheStore::now_millis())
 }
 
-fn event_provider() -> Option<Provider> {
+fn event_json() -> Option<Value> {
     let input = std::env::var("HERDR_PLUGIN_EVENT_JSON").ok()?;
-    let value: Value = serde_json::from_str(&input).ok()?;
-    find_agent(&value).and_then(|agent| agent.parse::<Provider>().ok())
+    serde_json::from_str(&input).ok()
+}
+
+// Event payloads are nested and their shape differs per event, so look the
+// field up anywhere in the tree rather than at a fixed path.
+fn find_field<'a>(value: &'a Value, names: &[&str]) -> Option<&'a str> {
+    match value {
+        Value::Object(map) => names
+            .iter()
+            .find_map(|name| map.get(*name).and_then(Value::as_str))
+            .or_else(|| map.values().find_map(|child| find_field(child, names))),
+        Value::Array(values) => values.iter().find_map(|child| find_field(child, names)),
+        _ => None,
+    }
 }
 
 fn find_agent(value: &Value) -> Option<&str> {
-    match value {
-        Value::Object(map) => map
-            .get("agent")
-            .and_then(Value::as_str)
-            .or_else(|| map.values().find_map(find_agent)),
-        Value::Array(values) => values.iter().find_map(find_agent),
-        _ => None,
-    }
+    find_field(value, &["agent"])
+}
+
+fn find_pane_id(value: &Value) -> Option<&str> {
+    find_field(value, &["pane_id", "paneId"])
 }
 
 fn tokens_for_provider(
@@ -175,5 +186,26 @@ mod tests {
     fn missing_snapshot_does_not_overwrite_sidebar_with_unavailable() {
         let values = tokens_for_provider(None, 1);
         assert!(values.is_none());
+    }
+
+    // Reading a pane repaints it, which visibly scrolls the agent's terminal.
+    // An event must name exactly one pane to read, so the other panes of the
+    // same provider are left alone.
+    #[test]
+    fn event_payload_names_the_single_pane_whose_topic_may_be_read() {
+        let value: Value = serde_json::from_str(
+            r#"{"event":"pane_agent_status_changed",
+                "data":{"pane_id":"w1:p2","agent":"grok","status":"working"}}"#,
+        )
+        .unwrap();
+        assert_eq!(find_pane_id(&value), Some("w1:p2"));
+        assert_eq!(find_agent(&value), Some("grok"));
+    }
+
+    #[test]
+    fn an_event_without_a_pane_reads_no_pane_at_all() {
+        let value: Value =
+            serde_json::from_str(r#"{"event":"x","data":{"agent":"claude"}}"#).unwrap();
+        assert_eq!(find_pane_id(&value), None);
     }
 }

@@ -13,6 +13,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Agent events no longer repaint every pane of a provider. Reading a pane makes
+  Herdr repaint it, which the user sees as the agent's terminal scrolling up and
+  snapping back to the bottom, once on agent detection and twice per turn
+  thereafter. An event now reads only the pane it names and publishes once
+  instead of twice; the remaining panes keep the topic they last published.
+- A failed or empty topic read now preserves the last published topic instead of
+  clearing it, so it no longer churns the token and forces a write on the next
+  refresh.
+
 - Agent topics now come only from the latest user prompt in pane output. Native
   `Thinking`/`Executing` titles and other AI status text are no longer published
   as the user's topic, including Grok's `❯` prompt format.
