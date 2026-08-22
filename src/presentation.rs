@@ -4,7 +4,6 @@ use crate::model::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataTokens {
-    pub quota_badge: String,
     pub quota_state: String,
     pub quota_icon: String,
     pub quota_provider: String,
@@ -14,13 +13,13 @@ pub struct MetadataTokens {
     pub quota_week: String,
     pub quota_week_severity: Option<Severity>,
     pub quota_summary: String,
+    pub quota_context: String,
     pub quota_error: Option<String>,
 }
 
 impl MetadataTokens {
     pub fn from_snapshot(snapshot: &ProviderSnapshot, now_unix: u64) -> Self {
         Self {
-            quota_badge: snapshot.provider.badge().to_string(),
             quota_state: snapshot.severity(now_unix).symbol().to_string(),
             quota_icon: snapshot.provider.icon().to_string(),
             quota_provider: snapshot.provider.display_name().to_string(),
@@ -30,13 +29,13 @@ impl MetadataTokens {
             quota_week: sidebar_window(snapshot, WindowKind::Weekly, now_unix),
             quota_week_severity: window_severity(snapshot, WindowKind::Weekly, now_unix),
             quota_summary: sidebar_summary(snapshot, now_unix),
+            quota_context: sidebar_context(snapshot),
             quota_error: None,
         }
     }
 
     pub fn unavailable(provider: Provider, reason: impl Into<String>) -> Self {
         Self {
-            quota_badge: provider.badge().to_string(),
             quota_state: Severity::Unknown.symbol().to_string(),
             quota_icon: provider.icon().to_string(),
             quota_provider: provider.display_name().to_string(),
@@ -52,6 +51,7 @@ impl MetadataTokens {
             quota_week: "week N/A".to_string(),
             quota_week_severity: Some(Severity::Unknown),
             quota_summary: "unavailable".to_string(),
+            quota_context: String::new(),
             quota_error: Some(reason.into().chars().take(80).collect()),
         }
     }
@@ -88,6 +88,14 @@ fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind, now_unix: u64) 
     snapshot
         .window(kind)
         .map(|window| format_window(window, now_unix, false))
+        .unwrap_or_default()
+}
+
+fn sidebar_context(snapshot: &ProviderSnapshot) -> String {
+    snapshot
+        .context
+        .as_ref()
+        .map(|context| format!("context {}%", format_percent(context.used_percent)))
         .unwrap_or_default()
 }
 
@@ -190,5 +198,17 @@ mod tests {
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
         assert_eq!(values.quota_5h_severity, Some(Severity::Warning));
         assert_eq!(values.quota_week_severity, Some(Severity::Danger));
+    }
+
+    #[test]
+    fn metadata_formats_context_usage_when_available() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Claude,
+            vec![window(WindowKind::Weekly, 10.0, 183_600)],
+            0,
+        )
+        .with_context(Some(crate::model::ContextUsage::new(23.5).unwrap()));
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_context, "context 24%");
     }
 }

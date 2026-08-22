@@ -3,6 +3,7 @@ use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind}
 use crate::providers::ProviderError;
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -144,7 +145,57 @@ fn fetch_from_process(
 
     write_rpc(input, 3, "account/rateLimits/read", serde_json::json!({}))?;
     let limits = read_rpc(output, 3)?;
-    parse_rate_limits(&limits, CacheStore::now_unix()).map_err(anyhow::Error::from)
+    let mut snapshot =
+        parse_rate_limits(&limits, CacheStore::now_unix()).map_err(anyhow::Error::from)?;
+
+    // Session previews come from Codex's local state database. This is one
+    // bounded read in the same app-server process as the quota request; it
+    // does not resume threads, scan rollout JSONL, or contact the model.
+    write_rpc(
+        input,
+        4,
+        "thread/list",
+        serde_json::json!({
+            "limit": 50,
+            "sortKey": "updated_at",
+            "useStateDbOnly": true
+        }),
+    )?;
+    if let Ok(threads) = read_rpc(output, 4) {
+        snapshot.session_summaries = parse_session_summaries(&threads);
+    }
+    Ok(snapshot)
+}
+
+fn parse_session_summaries(value: &Value) -> BTreeMap<String, String> {
+    let result = value.get("result").unwrap_or(value);
+    result
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|thread| {
+            let id = thread.get("id").and_then(Value::as_str)?;
+            let preview = thread.get("preview").and_then(Value::as_str)?;
+            let summary = preview
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .filter(|line| !line.eq_ignore_ascii_case("ask codex to do anything"))
+                .map(truncate_summary)?;
+            Some((id.to_string(), summary))
+        })
+        .collect()
+}
+
+fn truncate_summary(value: &str) -> String {
+    let characters: Vec<char> = value.chars().collect();
+    if characters.len() <= 80 {
+        return value.to_string();
+    }
+    let mut summary: String = characters.into_iter().take(77).collect();
+    summary.push('…');
+    summary
 }
 
 fn write_rpc(input: &mut ChildStdin, id: u64, method: &str, params: Value) -> Result<()> {
@@ -248,5 +299,20 @@ mod tests {
         assert!(!account_is_chatgpt(
             &json!({"result": {"account": {"authMode": "api_key"}}})
         ));
+    }
+
+    #[test]
+    fn extracts_compact_session_summaries_without_default_prompt() {
+        let summaries = parse_session_summaries(&json!({
+            "result": {"data": [
+                {"id": "thread-1", "preview": "A real task\n\nmore detail"},
+                {"id": "thread-2", "preview": "Ask Codex to do anything"}
+            ]}
+        }));
+        assert_eq!(
+            summaries.get("thread-1").map(String::as_str),
+            Some("A real task")
+        );
+        assert!(!summaries.contains_key("thread-2"));
     }
 }

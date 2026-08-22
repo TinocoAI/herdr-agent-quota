@@ -231,6 +231,15 @@ fn publish(
     let now = CacheStore::now_unix();
     for provider in providers {
         let snapshot = cache.load(*provider)?;
+        if let Some(snapshot) = snapshot.as_ref() {
+            for pane in panes.iter_mut().filter(|pane| pane.provider == *provider) {
+                if let Some(session_id) = pane.session_id.as_deref() {
+                    if let Some(summary) = snapshot.session_summaries.get(session_id) {
+                        pane.session_summary = summary.clone();
+                    }
+                }
+            }
+        }
         if let Some(values) = tokens_for_provider(snapshot.as_ref(), now) {
             tokens.push((*provider, values));
         }

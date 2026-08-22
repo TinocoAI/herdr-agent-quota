@@ -42,7 +42,8 @@ indefinitely.
   legacy symbol tokens remain available for compatibility.
 - Manual Herdr configuration and an optional `configure` helper with preview,
   backup, apply, and uninstall paths.
-- A local cache containing only normalized usage snapshots.
+- A local cache containing normalized usage snapshots and bounded, truncated
+  Codex session previews needed by the sidebar fallback.
 - No telemetry, no upload of usage data, no browser Cookie access, and no stored
   provider credentials.
 - Unknown or changed provider schemas fail safely. A failed refresh retains the
@@ -90,14 +91,17 @@ not provide an SDK or native sidebar component API. The supported path is:
 3. Let the user reference those tokens from `[ui.sidebar.agents].rows` and
    `rows_by_agent`.
 
-Custom token values are capped at 80 characters. The plugin publishes the new
-readable tokens and keeps the old pair for existing configurations:
+Custom token values are capped at 80 characters and a metadata report may update
+at most 16 tokens. The plugin publishes the readable tokens below; the old
+`$quota_badge` marker remains recognized for configuration cleanup but is no
+longer sent as a separate metadata value:
 
-- `$quota_badge`: `[C]`, `[X]`, or `[A]`.
+- `$quota_badge`: retired cleanup marker; it is no longer published.
 - `$quota_state`: `●`, `▲`, `!`, or `?`.
 - `$quota_icon`: compact text markers `◈C`, `✕G`, `✦Cl`, or `△Ag`.
 - `$quota_provider`: `Codex`, `Grok`, `Claude`, or `Agy` for custom layouts.
 - `$quota_status`: `OK`, `WARN`, `LOW`, or `N/A`.
+- `$quota_context`: provider-reported context-used percentage when available.
 - `$quota_5h`: compact five-hour remaining value and reset ETA when exposed.
 - `$quota_week`: compact weekly remaining value and reset ETA.
 - `$quota_summary`: window-driven compact remaining values and reset ETAs.

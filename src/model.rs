@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -171,11 +172,29 @@ impl UsageWindow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextUsage {
+    pub used_percent: f64,
+}
+
+impl ContextUsage {
+    pub fn new(used_percent: f64) -> Result<Self, ModelError> {
+        if !used_percent.is_finite() || !(0.0..=100.0).contains(&used_percent) {
+            return Err(ModelError::InvalidPercentage(used_percent));
+        }
+        Ok(Self { used_percent })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSnapshot {
     pub provider: Provider,
     pub source: String,
     pub fetched_at_unix: u64,
     pub windows: Vec<UsageWindow>,
+    #[serde(default)]
+    pub context: Option<ContextUsage>,
+    #[serde(default)]
+    pub session_summaries: BTreeMap<String, String>,
 }
 
 impl ProviderSnapshot {
@@ -185,7 +204,14 @@ impl ProviderSnapshot {
             source: provider.source().to_string(),
             fetched_at_unix,
             windows,
+            context: None,
+            session_summaries: BTreeMap::new(),
         }
+    }
+
+    pub fn with_context(mut self, context: Option<ContextUsage>) -> Self {
+        self.context = context;
+        self
     }
 
     pub fn window(&self, kind: WindowKind) -> Option<&UsageWindow> {
