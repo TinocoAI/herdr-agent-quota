@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Claude and Agy context rows now include the latest cache hit percentage when
+  their statusLine exposes cache counters. Claude can also show a bounded,
+  explicitly approximate `ttl≈` estimate from a transcript tail; no provider
+  request or extra metadata token is used.
 - Quota rows now show a compact `reset` ETA: minutes below one hour, hours and
   minutes below one day, and days plus hours for longer windows.
 - Active turns now start one short-lived global refresh watcher for Claude,
@@ -89,6 +93,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The context row now uses a dedicated violet accent and combines context/cache
+  diagnostics in the existing `$quota_context` token to stay within Herdr's
+  metadata limit.
 - Quota formatting is centralized in one presentation module shared by the
   sidebar, dashboard, and statusLine fallbacks. Codex remains weekly-only.
 - Five-hour and weekly quota windows now occupy separate sidebar rows. Missing

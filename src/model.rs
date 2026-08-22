@@ -174,6 +174,8 @@ impl UsageWindow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextUsage {
     pub used_percent: f64,
+    #[serde(default)]
+    pub cache: Option<CacheUsage>,
 }
 
 impl ContextUsage {
@@ -181,7 +183,68 @@ impl ContextUsage {
         if !used_percent.is_finite() || !(0.0..=100.0).contains(&used_percent) {
             return Err(ModelError::InvalidPercentage(used_percent));
         }
-        Ok(Self { used_percent })
+        Ok(Self {
+            used_percent,
+            cache: None,
+        })
+    }
+
+    pub fn with_cache(mut self, cache: Option<CacheUsage>) -> Self {
+        self.cache = cache;
+        self
+    }
+}
+
+/// Cache counters reported for the latest provider request.
+///
+/// The provider statusLine payloads expose uncached input, cache creation, and
+/// cache reads. Keeping the raw counters alongside the derived percentage
+/// makes the displayed ratio auditable and leaves room for richer diagnostics
+/// without another provider request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CacheUsage {
+    pub fresh_input_tokens: u64,
+    pub read_tokens: u64,
+    pub creation_tokens: u64,
+    pub hit_percent: f64,
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
+    #[serde(default)]
+    pub last_activity_unix: Option<u64>,
+}
+
+impl CacheUsage {
+    pub fn from_token_counts(
+        fresh_input_tokens: u64,
+        read_tokens: u64,
+        creation_tokens: u64,
+    ) -> Option<Self> {
+        let total = fresh_input_tokens
+            .saturating_add(read_tokens)
+            .saturating_add(creation_tokens);
+        if total == 0 {
+            return None;
+        }
+        Some(Self {
+            fresh_input_tokens,
+            read_tokens,
+            creation_tokens,
+            hit_percent: read_tokens as f64 / total as f64 * 100.0,
+            ttl_seconds: None,
+            last_activity_unix: None,
+        })
+    }
+
+    pub fn with_ttl_estimate(mut self, ttl_seconds: u64, last_activity_unix: u64) -> Self {
+        self.ttl_seconds = Some(ttl_seconds);
+        self.last_activity_unix = Some(last_activity_unix);
+        self
+    }
+
+    pub fn remaining_ttl_seconds(&self, now_unix: u64) -> Option<u64> {
+        let ttl = self.ttl_seconds?;
+        let last_activity = self.last_activity_unix?;
+        Some(last_activity.saturating_add(ttl).saturating_sub(now_unix))
     }
 }
 
@@ -305,6 +368,35 @@ mod tests {
         let value = window(WindowKind::Weekly, 42.5);
         assert_eq!(value.remaining_percent, 57.5);
         assert_eq!(format_percent(value.remaining_percent), "58");
+    }
+
+    #[test]
+    fn cache_hit_ratio_uses_fresh_creation_and_read_tokens() {
+        let cache = CacheUsage::from_token_counts(100, 800, 100).unwrap();
+        assert_eq!(cache.hit_percent, 80.0);
+        assert_eq!(CacheUsage::from_token_counts(0, 0, 0), None);
+        assert_eq!(
+            CacheUsage::from_token_counts(100, 0, 0)
+                .unwrap()
+                .hit_percent,
+            0.0
+        );
+    }
+
+    #[test]
+    fn old_context_snapshots_deserialize_without_cache_fields() {
+        let context: ContextUsage = serde_json::from_str(r#"{"used_percent":23.5}"#).unwrap();
+        assert_eq!(context.used_percent, 23.5);
+        assert!(context.cache.is_none());
+    }
+
+    #[test]
+    fn approximate_cache_ttl_saturates_after_expiry() {
+        let cache = CacheUsage::from_token_counts(1, 1, 0)
+            .unwrap()
+            .with_ttl_estimate(300, 1_000);
+        assert_eq!(cache.remaining_ttl_seconds(1_100), Some(200));
+        assert_eq!(cache.remaining_ttl_seconds(1_301), Some(0));
     }
 
     #[test]

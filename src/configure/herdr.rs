@@ -33,6 +33,7 @@ const CONFIG_PRESENCE_FILE: &str = "herdr-config.original.present";
 const QUOTA_SAFE_COLOR: &str = "#84b084";
 const QUOTA_WARNING_COLOR: &str = "#cdaa65";
 const QUOTA_DANGER_COLOR: &str = "#ca6470";
+const CONTEXT_COLOR: &str = "#9b8fd8";
 const PROVIDER_STYLES: [(&str, Option<&str>); 4] = [
     ("claude", Some("#c47f6a")),
     ("codex", Some("#7998b7")),
@@ -503,7 +504,7 @@ fn append_quota_rows(rows: &mut Array) {
 
     rows.push(Value::Array(styled_row(
         "$quota_context",
-        None,
+        Some(CONTEXT_COLOR),
         Some(true),
         Some(false),
     )));

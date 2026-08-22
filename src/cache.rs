@@ -81,10 +81,31 @@ impl CacheStore {
     /// response and immediately after compaction). Keep the last known value
     /// while still replacing the quota windows with the newest snapshot.
     pub fn save_preserving_context(&self, mut snapshot: ProviderSnapshot) -> Result<()> {
-        if snapshot.context.is_none() {
-            snapshot.context = self
-                .load(snapshot.provider)?
-                .and_then(|previous| previous.context);
+        // A malformed/temporarily unreadable old snapshot must not prevent a
+        // fresh statusLine value from replacing it.
+        if let Some(previous) = self
+            .load(snapshot.provider)
+            .ok()
+            .flatten()
+            .and_then(|snapshot| snapshot.context)
+        {
+            match (&mut snapshot.context, previous) {
+                (None, previous) => snapshot.context = Some(previous),
+                (Some(current), previous) => {
+                    if current.cache.is_none() {
+                        current.cache = previous.cache;
+                    } else if let (Some(cache), Some(previous_cache)) =
+                        (&mut current.cache, previous.cache)
+                    {
+                        if cache.ttl_seconds.is_none() {
+                            cache.ttl_seconds = previous_cache.ttl_seconds;
+                        }
+                        if cache.last_activity_unix.is_none() {
+                            cache.last_activity_unix = previous_cache.last_activity_unix;
+                        }
+                    }
+                }
+            }
         }
         self.save(&snapshot)
     }
@@ -264,7 +285,7 @@ impl CacheStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Provider, UsageWindow, WindowKind};
+    use crate::model::{CacheUsage, ContextUsage, Provider, UsageWindow, WindowKind};
     use tempfile::tempdir;
 
     fn snapshot() -> ProviderSnapshot {
@@ -281,6 +302,31 @@ mod tests {
         let cache = CacheStore::new(directory.path());
         cache.save(&snapshot()).unwrap();
         assert_eq!(cache.load(Provider::Grok).unwrap(), Some(snapshot()));
+    }
+
+    #[test]
+    fn statusline_refresh_preserves_previous_cache_diagnostics_when_current_usage_is_missing() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let context = ContextUsage::new(23.5).unwrap().with_cache(Some(
+            CacheUsage::from_token_counts(10, 90, 0)
+                .unwrap()
+                .with_ttl_estimate(300, 1_000),
+        ));
+        cache
+            .save(&snapshot().with_context(Some(context.clone())))
+            .unwrap();
+
+        let latest = snapshot().with_context(Some(ContextUsage::new(24.0).unwrap()));
+        cache.save_preserving_context(latest).unwrap();
+        let saved_context = cache
+            .load(Provider::Grok)
+            .unwrap()
+            .unwrap()
+            .context
+            .unwrap();
+        assert_eq!(saved_context.used_percent, 24.0);
+        assert_eq!(saved_context.cache, context.cache);
     }
 
     #[test]

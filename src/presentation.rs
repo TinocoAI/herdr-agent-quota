@@ -29,7 +29,7 @@ impl MetadataTokens {
             quota_week: sidebar_window(snapshot, WindowKind::Weekly, now_unix),
             quota_week_severity: window_severity(snapshot, WindowKind::Weekly, now_unix),
             quota_summary: sidebar_summary(snapshot, now_unix),
-            quota_context: sidebar_context(snapshot),
+            quota_context: sidebar_context(snapshot, now_unix),
             quota_error: None,
         }
     }
@@ -91,12 +91,18 @@ fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind, now_unix: u64) 
         .unwrap_or_default()
 }
 
-fn sidebar_context(snapshot: &ProviderSnapshot) -> String {
-    snapshot
-        .context
-        .as_ref()
-        .map(|context| format!("context {}%", format_percent(context.used_percent)))
-        .unwrap_or_default()
+fn sidebar_context(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
+    let Some(context) = snapshot.context.as_ref() else {
+        return String::new();
+    };
+    let mut parts = vec![format!("context {}%", format_percent(context.used_percent))];
+    if let Some(cache) = context.cache.as_ref() {
+        parts.push(format!("cache {}%", format_percent(cache.hit_percent)));
+        if let Some(seconds) = cache.remaining_ttl_seconds(now_unix) {
+            parts.push(format!("ttl≈{}", format_ttl(seconds)));
+        }
+    }
+    parts.join(" · ")
 }
 
 fn format_window(window: &UsageWindow, now_unix: u64, include_left: bool) -> String {
@@ -115,6 +121,10 @@ fn format_reset_eta(reset_at: ResetAt, now_unix: u64) -> String {
     if seconds == 0 {
         return "due".to_string();
     }
+    format_duration(seconds)
+}
+
+fn format_duration(seconds: u64) -> String {
     let minutes = (seconds / 60).max(1);
     if minutes >= 24 * 60 {
         return format!("{}d{}h", minutes / (24 * 60), (minutes % (24 * 60)) / 60);
@@ -123,6 +133,17 @@ fn format_reset_eta(reset_at: ResetAt, now_unix: u64) -> String {
         return format!("{}h{:02}m", minutes / 60, minutes % 60);
     }
     format!("{minutes}m")
+}
+
+fn format_ttl(seconds: u64) -> String {
+    if seconds == 0 {
+        return "0m".to_string();
+    }
+    let minutes = seconds / 60;
+    if (60..24 * 60).contains(&minutes) && minutes.is_multiple_of(60) {
+        return format!("{}h", minutes / 60);
+    }
+    format_duration(seconds)
 }
 
 #[cfg(test)]
@@ -149,6 +170,8 @@ mod tests {
             "2d3h"
         );
         assert_eq!(format_reset_eta(ResetAt::from_unix_seconds(99), 100), "due");
+        assert_eq!(format_ttl(0), "0m");
+        assert_eq!(format_ttl(3_600), "1h");
     }
 
     #[test]
@@ -210,5 +233,23 @@ mod tests {
         .with_context(Some(crate::model::ContextUsage::new(23.5).unwrap()));
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
         assert_eq!(values.quota_context, "context 24%");
+    }
+
+    #[test]
+    fn metadata_formats_cache_hit_rate_and_approximate_ttl() {
+        let cache = crate::model::CacheUsage::from_token_counts(100, 800, 100)
+            .unwrap()
+            .with_ttl_estimate(60 * 60, 0);
+        let context = crate::model::ContextUsage::new(23.5)
+            .unwrap()
+            .with_cache(Some(cache));
+        let snapshot = ProviderSnapshot::new(
+            Provider::Claude,
+            vec![window(WindowKind::Weekly, 10.0, 183_600)],
+            0,
+        )
+        .with_context(Some(context));
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_context, "context 24% · cache 80% · ttl≈1h");
     }
 }

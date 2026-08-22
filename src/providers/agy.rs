@@ -138,7 +138,14 @@ mod tests {
     #[test]
     fn parses_optional_context_window_usage() {
         let value = json!({
-            "context_window": {"used_percentage": 41.0},
+            "context_window": {
+                "used_percentage": 41.0,
+                "current_usage": {
+                    "input_tokens": 50,
+                    "cache_read_input_tokens": 150,
+                    "cache_creation_input_tokens": 0
+                }
+            },
             "quota": {
                 "gemini-weekly": {"remaining_fraction": 0.8}
             }
@@ -150,6 +157,17 @@ mod tests {
                 .as_ref()
                 .map(|context| context.used_percent),
             Some(41.0)
+        );
+        assert_eq!(
+            snapshot
+                .context
+                .as_ref()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .hit_percent,
+            75.0
         );
     }
 
