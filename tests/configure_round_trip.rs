@@ -96,6 +96,10 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
     assert!(applied.contains("$quota_topic"));
     assert!(applied.contains("$quota_context"));
     assert!(applied.contains("fg = \"#9b8fd8\""));
+    assert!(applied.find("$quota_provider").unwrap() < applied.find("$quota_context").unwrap());
+    assert!(applied.contains("$quota_cache"));
+    assert!(applied.contains("$quota_cache_ttl"));
+    assert!(applied.contains("fg = \"#6fb5b7\""));
     assert!(applied.contains("row_gap = 1 # herdr-agent-quota"));
     assert!(applied.find("$quota_topic").unwrap() < applied.find("$quota_5h_normal").unwrap());
     assert!(applied.contains("fg = \"#84b084\""));
@@ -347,7 +351,7 @@ fn claude_collector_does_not_republish_unchanged_quota() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(
         state.path(),
-        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","tokens":{"quota_state":"?","quota_icon":"✦Cl","quota_provider":"Claude","quota_status":"N/A","quota_5h":"5h 42%","quota_5h_warning":"5h 42%","quota_week":"week 73%","quota_week_warning":"week 73%","quota_summary":"5h 42% · week 73%"}}]}}"#,
+        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","tokens":{"quota_state":"?","quota_provider":"Claude","quota_5h":"5h 42%","quota_5h_warning":"5h 42%","quota_week":"week 73%","quota_week_warning":"week 73%","quota_summary":"5h 42% · week 73%"}}]}}"#,
     );
 
     let input = br#"{

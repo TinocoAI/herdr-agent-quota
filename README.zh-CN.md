@@ -14,8 +14,9 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 ```text
 ● Owner · Claude
   hi                     ← 这个 pane 当前在做什么
-  context 23% · cache 96% · ttl≈58m
-                         ← provider 提供字段时显示 context/cache 诊断
+  context 23%             ← provider 原生 context 百分比
+  cache 99.6% hit         ← 整个 session 累计命中率
+  cache last 2m ago · ttl≈58m
   5h 100% reset 3h07m
   week 31% reset 2d3h
 ```
@@ -154,11 +155,12 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会
 字段工作，不会把这些版本号写死；兼容的新版本可以继续使用。
 
 侧栏显示的是**额度剩余百分比**和距离下次额度重置的时间，不是额度 token 数量。
-Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context **已用**百分比；
-同时提供 `current_usage` 时会显示最新请求的缓存命中率
-（`read / (fresh + creation + read)`）。Claude 如果同时有 transcript 路径和明确的
-5 分钟/1 小时缓存桶，还会显示 `ttl≈...`，这是只读取 transcript 最后 16 KiB 得到的
-本地近似，不是服务端确认的过期时间。Codex 会显示本地 state database 里的短会话预览；
+Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context **已用**百分比。
+如果有 statusLine transcript 和 session id，`cache N.N% hit` 是主 session 的累计命中率
+（`read / (fresh + creation + read)`），不是最新一轮；下一行显示最近一次有缓存响应
+距离现在多久。Claude 如果还有明确的 5 分钟/1 小时缓存桶，会显示 `ttl≈...`，这是本地
+近似，不是服务端确认的过期时间。首次 session 更新会读取一次已有 transcript，之后只读
+新增字节。Codex 会显示本地 state database 里的短会话预览；
 当前安全的 app-server 连接只查额度，没有绑定活动 thread，因此不猜测 Codex context
 或缓存字段。Grok 当前的 billing 来源没有 context 或缓存字段。没有证据的字段会隐藏，
 不会伪造 `cached expires`：
@@ -166,6 +168,9 @@ Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context
 ```text
 ● Owner · Claude
   hi
+  context 23%
+  cache 99.6% hit
+  cache last 2m ago · ttl≈58m
   5h 100% reset 3h07m
   week 31% reset 2d3h
 ```
@@ -193,9 +198,10 @@ Agy 通过原生的一次性 `statusLine` hook 把额度 JSON 传给插件。配
 [ui.sidebar.agents]
 row_gap = 1 # herdr-agent-quota
 rows = [
-  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
+  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }, { token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
-  [{ token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
+  [{ token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false }],
+  [{ token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false }],
   [{ token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false }],
   [{ token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false }],
   [{ token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false }],
@@ -212,9 +218,11 @@ rows = [
 - `$quota_topic` 放在额度上方，阅读顺序是 agent、当前任务、资源状态。
 - Codex 的空/默认 prompt 会回退为本地 app-server state database 的短会话预览；
   其他 provider 仍保持空白。
-- `$quota_context` 先显示 provider 报告的 context **已用**百分比。Claude 和 Agy
-  可以追加最新请求的 `cache N%`；Claude 在有 transcript 和明确缓存桶时还会追加
-  `ttl≈...`。字段缺失时隐藏，不做 tokenizer 猜测，TTL 也明确标记为近似。
+- `$quota_context` 显示 provider 报告的 context **已用**百分比，并紧跟在 provider
+  名称后面。`$quota_cache` 是主 session transcript 的累计命中率，不是每一轮的比例；
+  固定保留一位小数，避免 `99.6%` 被显示成 `100%`。`$quota_cache_ttl` 显示最近一次
+  有缓存响应距离现在多久；Claude 提供 5m/1h 缓存桶时还会显示剩余的 `ttl≈...`。
+  字段缺失时隐藏，不做猜测。
 - context 行使用紫色强调色（`#9b8fd8`），与额度续航的绿/琥珀/红色区分开。
 - 每个窗口只发布一个样式 token。颜色按额度续航动态判断，不再使用固定
   余额阈值：将剩余额度比例与窗口剩余时间比例比较，额度消耗不快于时间
@@ -224,8 +232,9 @@ rows = [
 - `row_gap = 1` 在 agent 卡片之间留一行空白；已有的显式 `row_gap`
   配置会原样保留。
 - `$quota_5h`、`$quota_week`、`$quota_summary` 仍保留给需要无样式或
-  紧凑布局的自定义配置。`$quota_summary` 是额度窗口汇总，不是缓存过期时间；
-  context/cache 诊断共用 `$quota_context`，不会新增 metadata token。
+  紧凑布局的自定义配置。`$quota_summary` 是额度窗口汇总，不是缓存过期时间。
+  Herdr metadata 始终不超过 16 个 token；升级时会清理旧的 `$quota_icon`/
+  `$quota_status` 字段。
 
 Herdr 0.8 的样式只接受固定十六进制颜色，不支持跟随主题的语义色。
 默认的绿色、琥珀色和红色采用高明度柔和色阶并加粗，降低 Herdr 深色侧栏
@@ -259,13 +268,14 @@ Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 
 - **Claude Code：** 使用官方
   [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline) 提供
   5 小时、7 天额度、context 已用百分比和最新缓存计数。原有 statusLine 会被备份、
-  串联，并可由卸载 action 恢复；当输入同时提供 transcript 路径和明确缓存桶时，
-  采集器只读取 transcript 最后 16 KiB 推断 `ttl≈...`，不联网、不读取完整对话。
+  串联，并可由卸载 action 恢复；当输入提供 transcript 路径和 session id 时，
+  采集器首次读取一次已有主会话并按 offset 增量累计，之后只读新增行；明确缓存桶
+  才推断 `ttl≈...`，不联网、不发模型请求。
 - **Agy/Antigravity：** 使用官方
   [`/usage` 和 statusline 文档](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
   中的 Gemini、第三方额度池、context 已用百分比和最新缓存计数。两个额度池同时存在时，
-  取较低的剩余百分比，让单个 Agy 行保持保守；Agy 没有可靠的 TTL 字段，因此只显示
-  命中率。
+  取较低的剩余百分比，让单个 Agy 行保持保守；Agy 没有可靠的 TTL 字段，只有在
+  statusLine 提供 transcript/session 标识时才显示缓存累计行。
 
 快照和刷新标记保存在 Herdr 插件状态目录中。插件不会上传使用数据，不读取
 浏览器 Cookie/Keychain，不刷新或写入 provider 凭据。provider 失败时保留

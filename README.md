@@ -14,8 +14,9 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 ```text
 ● Owner · Claude
   hi                     ← what that pane is actually working on
-  context 23% · cache 96% · ttl≈58m
-                         ← cache fields appear when the CLI exposes them
+  context 23%             ← provider-native context percentage
+  cache 99.6% hit         ← cumulative for this session
+  cache last 2m ago · ttl≈58m
   5h 100% reset 3h07m
   week 31% reset 2d3h
 ```
@@ -182,10 +183,13 @@ strings, so newer compatible CLI releases can continue to work.
 
 The sidebar shows **percentage remaining** and the time until each quota reset,
 not quota token counts. Claude and Agy also show provider-reported context
-percentage and, when `current_usage` contains the counters, the latest cache
-hit ratio (`read / (fresh + creation + read)`). Claude may additionally show
-`ttl≈...`: this is a local estimate from the last 16 KiB of its transcript and
-the provider's 5-minute/1-hour cache bucket, not a server-confirmed expiry.
+percentage. When a statusLine transcript and session id are available,
+`cache N.N% hit` is the cumulative main-session ratio
+(`read / (fresh + creation + read)`), not the latest turn. The next row shows
+how long ago the latest cache-bearing response arrived and, for Claude, a
+`ttl≈...` estimate from the provider's 5-minute/1-hour bucket. This is local
+diagnostic math, not a server-confirmed expiry; the first session update reads
+the existing transcript once, then later updates read only appended bytes.
 Codex shows a short session preview from its local state database; its live
 context and cache fields are not queried because the current safe app-server
 connection is quota-only and does not attach to an active thread. Grok's
@@ -216,9 +220,10 @@ once:
 [ui.sidebar.agents]
 row_gap = 1 # herdr-agent-quota
 rows = [
-  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
+  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }, { token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
-  [{ token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
+  [{ token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false }],
+  [{ token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false }],
   [{ token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false }],
   [{ token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false }],
   [{ token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false }],
@@ -237,11 +242,13 @@ rows = [
   then resource status.
 - For Codex, an empty/default prompt falls back to the short thread preview from
   the local app-server state database; other providers keep the prompt empty.
-- `$quota_context` starts with the provider-reported context **used** percentage.
-  Claude and Agy can append `cache N%` from the latest statusLine request; a
-  Claude transcript with an explicit cache bucket can append `ttl≈...`. Missing
-  fields are hidden instead of guessed, and the TTL marker is deliberately
-  approximate.
+- `$quota_context` is the provider-reported context **used** percentage and sits
+  directly after the provider name. `$quota_cache` is the cumulative hit rate
+  for the main session transcript, not a per-turn value; it is shown to one
+  decimal place so `99.6%` is not rounded to `100%`. `$quota_cache_ttl` shows
+  the elapsed time since the latest cache-bearing assistant response and, when
+  Claude exposes a 5m/1h bucket, the remaining `ttl≈...` estimate. Missing
+  fields are hidden instead of guessed.
 - The context row uses a violet accent (`#9b8fd8`) so context pressure is easy
   to distinguish from the green/amber/red quota runway colors.
 - Each window publishes exactly one styled variant. Color follows runway rather
@@ -254,8 +261,8 @@ rows = [
   `row_gap` value is preserved.
 - `$quota_5h`, `$quota_week`, and `$quota_summary` remain available for custom
   unstyled layouts. `$quota_summary` is the compact quota-window summary, not a
-  cache-expiry value; `$quota_context` is the single token for context and cache
-  diagnostics so the plugin stays within Herdr's metadata-token limit.
+  cache-expiry value. Herdr reports no more than sixteen metadata tokens; old
+  `$quota_icon`/`$quota_status` fields are cleaned up during migration.
 
 Herdr 0.8 only accepts fixed hex colors for styled tokens, not semantic theme
 colors. The default palette uses soft, high-luminance green, amber, and red
@@ -295,15 +302,16 @@ such as `Thinking` or `Executing`. It does not show the working directory.
 - **Claude Code:** the official [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline)
   supplies the five-hour, seven-day, context-used percentage, and latest
   cache counters. A previous statusLine command is backed up, chained, and
-  restored by the uninstall action. When a transcript path and an explicit
-  cache bucket are present, the hook reads only its final 16 KiB to produce the
-  `ttl≈...` estimate; it makes no network request and does not read the full
-  conversation.
+  restored by the uninstall action. When a transcript path and session id are
+  present, the hook accumulates the main session's assistant usage using a
+  byte offset; the first update reads the existing transcript once and later
+  updates read only appended lines. A cache bucket gives the explicitly
+  approximate `ttl≈...`; there is no network request or model turn.
 - **Agy/Antigravity:** the official [`/usage` and statusline docs](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
-  supply Gemini and third-party pools plus context-used percentage and latest
-  cache counters. When both pools exist, the sidebar uses the lowest remaining
-  percentage so the single Agy row is conservative; Agy has no reliable TTL
-  field, so it shows the hit ratio only.
+  supply Gemini and third-party pools plus context-used percentage and cache
+  counters. When both pools exist, the sidebar uses the lowest remaining
+  percentage so the single Agy row is conservative. Agy has no reliable TTL
+  field; its cache rows appear only when a session transcript/id is supplied.
 
 Snapshots and refresh markers stay in Herdr's plugin state directory. No usage
 data is uploaded, browser cookies or browser keychains are read, and provider
