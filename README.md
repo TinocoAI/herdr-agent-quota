@@ -14,6 +14,7 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 ```text
 ● Owner · Claude
   hi                     ← what that pane is actually working on
+  context 23%            ← when the CLI exposes context usage
   5h 100% reset 3h07m
   week 31% reset 2d3h
 ```
@@ -25,8 +26,8 @@ ETAs, Codex and Grok show their weekly windows, and each agent card uses the
 latest user prompt rather than an AI-generated status.*
 
 - **Four CLIs, one sidebar** — Claude Code, Codex, Grok, Agy/Antigravity.
-- **Three or four lines per pane** — provider, one line per quota window, and
-  the latest user prompt.
+- **Compact, capability-aware cards** — provider, prompt/session summary,
+  supported context usage, and quota windows. Unsupported rows are hidden.
 - **Local only** — no usage data uploaded, no browser cookies, no keychain
   scraping, and credentials are never written or refreshed.
 - **Never lies to you** — a failed refresh keeps the last good number instead
@@ -169,22 +170,26 @@ long turns no longer start one refresh command per tool call.
 
 | CLI | Sidebar windows | Local collection path | Extra setup |
 | --- | --- | --- | --- |
-| Claude Code `2.1.233` | `5h` + `week` | Official `statusLine` JSON: `rate_limits.five_hour` and `seven_day` | The configure action installs and chains it automatically |
-| OpenAI Codex `0.147.0` | `week` | One-shot local `codex app-server --stdio`, `account/rateLimits/read` | ChatGPT subscription login; API-key mode is shown as unavailable |
+| Claude Code `2.1.233` | `5h` + `week` + context | Official `statusLine` JSON: `rate_limits` and `context_window` | The configure action installs and chains it automatically |
+| OpenAI Codex `0.147.0` | `week` + local session summary | One-shot local `codex app-server --stdio`: quota and bounded `thread/list` | ChatGPT subscription login; API-key mode is shown as unavailable |
 | Grok CLI / Grok Build `1.0.4` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Covered by the unified watcher; no response hook is installed |
-| Agy / Antigravity CLI `1.1.13` | `5h` + `week` | Official `statusLine` JSON `quota` object (`gemini-*` and `3p-*` pools) | The configure action installs and chains it automatically |
+| Agy / Antigravity CLI `1.1.13` | `5h` + `week` + context | Official `statusLine` JSON: `quota` and `context_window` | The configure action installs and chains it automatically |
 
 Versions above were checked on the development machine on 2026-08-15. The
 parser follows the provider fields rather than hard-coding these version
 strings, so newer compatible CLI releases can continue to work.
 
-The sidebar shows **percentage remaining** and the time until each reset, not
-token counts. Codex and Grok expose their weekly window. Claude Code and Agy
-expose both five-hour and weekly windows. Reset ETAs use minutes below one hour,
-hours and minutes below one day, and days plus hours above one day. During a
-working turn, one short-lived global watcher polls once per configured interval,
-coalesces active fetches, and exits when all selected providers settle. The
-sidebar does not run a permanent daemon.
+The sidebar shows **percentage remaining** and the time until each quota reset,
+not quota token counts. Claude and Agy also show context percentage when their
+statusLine payload contains it. Codex shows a short session preview from its
+local state database; its live context percentage is not queried because the
+current safe app-server connection is quota-only and does not attach to an
+active thread. Grok's current billing source has neither context nor session
+data. No provider exposes a reliable cache-entry expiry timestamp, so there is
+intentionally no `cached expires` row. During a working turn, one short-lived
+global watcher polls once per configured interval, coalesces active fetches, and
+exits when all selected providers settle. The sidebar does not run a permanent
+daemon.
 
 A failed refresh never replaces a successful cached value with `unavailable`;
 a provider without any successful snapshot is shown as `N/A` until its first
@@ -210,6 +215,7 @@ row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
+  [{ token = "$quota_context", bold = true, dim = false }],
   [{ token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false }],
   [{ token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false }],
   [{ token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false }],
@@ -226,6 +232,11 @@ rows = [
   Antigravity-inspired mint for Agy.
 - `$quota_topic` comes before the quota rows so the card reads as agent, task,
   then resource status.
+- For Codex, an empty/default prompt falls back to the short thread preview from
+  the local app-server state database; other providers keep the prompt empty.
+- `$quota_context` is the provider-reported context **used** percentage. It is
+  currently populated by Claude and Agy statusLine payloads; missing fields are
+  hidden instead of guessed.
 - Each window publishes exactly one styled variant. Color follows runway rather
   than a fixed quota threshold: remaining quota is compared with the percentage
   of window time still left. At or ahead of pace is green; behind pace is
@@ -235,7 +246,8 @@ rows = [
 - `row_gap = 1` adds one blank row between agent cards. An existing explicit
   `row_gap` value is preserved.
 - `$quota_5h`, `$quota_week`, and `$quota_summary` remain available for custom
-  unstyled layouts.
+  unstyled layouts. `$quota_summary` is the compact quota-window summary, not a
+  cache-expiry value.
 
 Herdr 0.8 only accepts fixed hex colors for styled tokens, not semantic theme
 colors. The default palette uses soft, high-luminance green, amber, and red
@@ -260,22 +272,28 @@ such as `Thinking` or `Executing`. It does not show the working directory.
 ## Data sources and privacy
 
 - **Codex:** the local official [app-server JSON-RPC](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
-  rate-limit response. The plugin accepts the seven-day window by duration,
-  rather than assuming which field is primary. API-key authentication is
-  intentionally not mislabeled as a ChatGPT subscription quota.
+  rate-limit response plus one bounded, state-database-only `thread/list` for
+  session previews. The plugin accepts the seven-day window by duration, rather
+  than assuming which field is primary. API-key authentication is intentionally
+  not mislabeled as a ChatGPT subscription quota. It does not resume threads or
+  read rollout JSONL, so it cannot claim a live context percentage. Only the
+  first non-empty line of at most 50 previews is retained, truncated to 80
+  characters.
 - **Grok:** the local `~/.grok/auth.json` login key is read in memory and sent
   to the weekly billing endpoint used by the Grok CLI. The response is accepted
   only when it identifies a weekly period. This is SuperGrok usage, not xAI
   developer/API-team billing. The unified watcher and the existing 60-second
   debounce limit active requests; it never logs in or refreshes the key.
 - **Claude Code:** the official [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline)
-  supplies the five-hour and seven-day values. A previous statusLine command is
-  backed up, chained, and restored by the uninstall action; the active-turn
-  watcher republishes each new snapshot without calling Herdr from that hook.
+  supplies the five-hour, seven-day, and context-used percentage values. A
+  previous statusLine command is backed up, chained, and restored by the
+  uninstall action; the active-turn watcher republishes each new snapshot
+  without calling Herdr from that hook.
 - **Agy/Antigravity:** the official [`/usage` and statusline docs](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
-  supply Gemini and third-party pools. When both pools exist, the sidebar uses
-  the lowest remaining percentage so the single Agy row is conservative; its
-  statusLine cache is published by the same active-turn watcher.
+  supply Gemini and third-party pools plus context-used percentage. When both
+  pools exist, the sidebar uses the lowest remaining percentage so the single
+  Agy row is conservative; its statusLine cache is published by the same
+  active-turn watcher.
 
 Snapshots and refresh markers stay in Herdr's plugin state directory. No usage
 data is uploaded, browser cookies or browser keychains are read, and provider

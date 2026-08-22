@@ -3,13 +3,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 18] = [
+const QUOTA_ROW_MARKERS: [&str; 20] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
     "$quota_provider",
     "$quota_status",
     "$quota_summary",
+    "$quota_session",
+    "$quota_context",
     "$quota_topic",
     "$quota_5h",
     "$quota_week",
@@ -496,6 +498,13 @@ fn append_quota_rows(rows: &mut Array) {
         "$quota_topic",
         None,
         None,
+        Some(false),
+    )));
+
+    rows.push(Value::Array(styled_row(
+        "$quota_context",
+        None,
+        Some(true),
         Some(false),
     )));
 

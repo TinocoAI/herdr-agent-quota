@@ -77,6 +77,18 @@ impl CacheStore {
         Ok(())
     }
 
+    /// StatusLine payloads may temporarily omit context (before the first
+    /// response and immediately after compaction). Keep the last known value
+    /// while still replacing the quota windows with the newest snapshot.
+    pub fn save_preserving_context(&self, mut snapshot: ProviderSnapshot) -> Result<()> {
+        if snapshot.context.is_none() {
+            snapshot.context = self
+                .load(snapshot.provider)?
+                .and_then(|previous| previous.context);
+        }
+        self.save(&snapshot)
+    }
+
     pub fn with_lock<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         self.ensure()?;
         let path = self.root.join("refresh.lock");

@@ -1,5 +1,6 @@
 use crate::cache::CacheStore;
 use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
+use crate::providers::statusline::parse_context;
 use crate::providers::ProviderError;
 use serde_json::Value;
 
@@ -22,11 +23,16 @@ pub fn parse_statusline(
             "rate_limits has no supported windows".to_string(),
         ));
     }
-    Ok(ProviderSnapshot::new(
-        Provider::Claude,
-        windows,
-        fetched_at_unix,
-    ))
+    Ok(
+        ProviderSnapshot::new(Provider::Claude, windows, fetched_at_unix).with_context(
+            parse_context(
+                value
+                    .get("context_window")
+                    .or_else(|| value.get("contextWindow")),
+            )
+            .unwrap_or(None),
+        ),
+    )
 }
 
 fn parse_window(
@@ -80,6 +86,27 @@ mod tests {
         assert_eq!(
             snapshot.window(WindowKind::FiveHour).unwrap().resets_at,
             Some(ResetAt::from_unix_seconds(1_786_795_200))
+        );
+    }
+
+    #[test]
+    fn parses_optional_context_window_usage() {
+        let value = json!({
+            "context_window": {
+                "used_percentage": 23.5,
+                "remaining_percentage": 76.5
+            },
+            "rate_limits": {
+                "five_hour": {"used_percentage": 58.0}
+            }
+        });
+        let snapshot = parse_statusline(&value, 1).unwrap();
+        assert_eq!(
+            snapshot
+                .context
+                .as_ref()
+                .map(|context| context.used_percent),
+            Some(23.5)
         );
     }
 

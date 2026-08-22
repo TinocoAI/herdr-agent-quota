@@ -52,7 +52,7 @@ pub fn run_statusline_hook() -> Result<()> {
     std::io::stdin().read_to_end(&mut input)?;
     if let Ok(snapshot) = run_statusline(&input) {
         if let Ok(cache) = CacheStore::from_env() {
-            let _ = cache.save(&snapshot);
+            let _ = cache.save_preserving_context(snapshot);
         }
     }
     let cache = CacheStore::from_env()?;

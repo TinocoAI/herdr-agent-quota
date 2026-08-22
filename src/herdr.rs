@@ -7,12 +7,12 @@ use std::process::Command;
 
 const METADATA_TTL_MS: &str = "86400000";
 const METADATA_TOKEN_NAMES: [&str; 16] = [
-    "quota_badge",
     "quota_state",
     "quota_icon",
     "quota_provider",
     "quota_status",
     "quota_summary",
+    "quota_context",
     "quota_5h",
     "quota_5h_normal",
     "quota_5h_warning",
@@ -24,11 +24,14 @@ const METADATA_TOKEN_NAMES: [&str; 16] = [
     "quota_topic",
     "quota_error",
 ];
+const LEGACY_METADATA_TOKEN_NAMES: [&str; 2] = ["quota_badge", "quota_session"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPane {
     pub pane_id: String,
     pub provider: Provider,
+    pub session_id: Option<String>,
+    pub session_summary: String,
     pub topic: String,
     pub tokens: BTreeMap<String, String>,
 }
@@ -143,9 +146,18 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
                         })
                         .collect();
                     let topic = tokens.get("quota_topic").cloned().unwrap_or_default();
+                    let session_summary = tokens.get("quota_session").cloned().unwrap_or_default();
+                    let session_id = map
+                        .get("agent_session")
+                        .and_then(Value::as_object)
+                        .and_then(|session| session.get("value"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
                     panes.push(AgentPane {
                         pane_id: pane_id.to_string(),
                         provider,
+                        session_id,
+                        session_summary,
                         // Preserve the last published topic during quota-only
                         // refreshes. Agent events refresh it from pane output.
                         topic,
@@ -232,7 +244,7 @@ pub fn publish_tokens(
         else {
             continue;
         };
-        let topic = truncate_topic(&pane.topic);
+        let topic = display_topic(pane);
         let desired = desired_tokens(values, &topic);
         if metadata_matches(&pane.tokens, &desired) {
             continue;
@@ -255,7 +267,7 @@ pub fn publish_tokens(
             ])
             .args(["--seq", &sequence.to_string()])
             .args(["--ttl-ms", METADATA_TTL_MS]);
-        for name in METADATA_TOKEN_NAMES {
+        for name in metadata_report_names(pane, &desired) {
             if let Some(value) = desired.get(name) {
                 command.args(["--token", &format!("{name}={value}")]);
             } else {
@@ -301,13 +313,13 @@ fn pane_is_scrolled(executable: &std::ffi::OsStr, pane_id: &str) -> bool {
 
 fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, String> {
     let mut tokens = BTreeMap::from([
-        ("quota_badge".to_string(), values.quota_badge.clone()),
         ("quota_state".to_string(), values.quota_state.clone()),
         ("quota_icon".to_string(), values.quota_icon.clone()),
         ("quota_provider".to_string(), values.quota_provider.clone()),
         ("quota_status".to_string(), values.quota_status.clone()),
         ("quota_summary".to_string(), values.quota_summary.clone()),
     ]);
+    insert_optional_token(&mut tokens, "quota_context", &values.quota_context);
     insert_optional_token(&mut tokens, "quota_5h", &values.quota_5h);
     insert_severity_token(
         &mut tokens,
@@ -329,6 +341,14 @@ fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, Stri
     tokens
 }
 
+fn display_topic(pane: &AgentPane) -> String {
+    let topic = pane.topic.trim();
+    if topic.is_empty() || is_status_line(topic) {
+        return truncate_topic(&pane.session_summary);
+    }
+    truncate_topic(topic)
+}
+
 fn metadata_matches(
     current: &BTreeMap<String, String>,
     desired: &BTreeMap<String, String>,
@@ -336,6 +356,43 @@ fn metadata_matches(
     METADATA_TOKEN_NAMES
         .into_iter()
         .all(|name| current.get(name) == desired.get(name))
+        && LEGACY_METADATA_TOKEN_NAMES
+            .into_iter()
+            .all(|name| !current.contains_key(name))
+}
+
+fn metadata_report_names(
+    pane: &AgentPane,
+    desired: &BTreeMap<String, String>,
+) -> Vec<&'static str> {
+    let mut names = METADATA_TOKEN_NAMES
+        .into_iter()
+        .filter(|name| desired.contains_key(*name) || pane.tokens.contains_key(*name))
+        .collect::<Vec<_>>();
+    names.extend(
+        LEGACY_METADATA_TOKEN_NAMES
+            .into_iter()
+            .filter(|name| pane.tokens.contains_key(*name)),
+    );
+    if names.len() <= METADATA_TOKEN_NAMES.len() {
+        return names;
+    }
+
+    // A pane upgraded from the pre-context token set can briefly contain all
+    // old and new names. Keep the new context token and clear legacy names in
+    // the same bounded report; a stable summary/status token can be refreshed
+    // on the following poll if necessary.
+    for candidate in ["quota_summary", "quota_status", "quota_icon"] {
+        let Some(index) = names.iter().position(|name| *name == candidate) else {
+            continue;
+        };
+        if pane.tokens.get(candidate) == desired.get(candidate) {
+            names.remove(index);
+            break;
+        }
+    }
+    names.truncate(METADATA_TOKEN_NAMES.len());
+    names
 }
 
 fn insert_severity_token(
@@ -437,6 +494,7 @@ fn is_status_line(value: &str) -> bool {
         || lower.starts_with("session ")
         || lower.starts_with("auto mode")
         || lower.starts_with("shift+tab")
+        || lower == "ask codex to do anything"
         || matches!(
             lower.as_str(),
             "/clear" | "/compact" | "/help" | "/status" | "/usage" | "/model" | "/config"
@@ -467,12 +525,16 @@ mod tests {
                 AgentPane {
                     pane_id: "w1:p1".to_string(),
                     provider: Provider::Codex,
+                    session_id: None,
+                    session_summary: String::new(),
                     topic: String::new(),
                     tokens: BTreeMap::new(),
                 },
                 AgentPane {
                     pane_id: "w1:p2".to_string(),
                     provider: Provider::Claude,
+                    session_id: None,
+                    session_summary: String::new(),
                     topic: String::new(),
                     tokens: BTreeMap::new(),
                 },
@@ -490,6 +552,37 @@ mod tests {
         let mut panes = Vec::new();
         collect_agent_panes(&value, &mut panes);
         assert_eq!(panes[0].topic, "latest task");
+    }
+
+    #[test]
+    fn discovers_codex_session_id_and_preserves_session_summary() {
+        let value = json!({"result": {"agents": [{
+            "pane_id": "w1:p1",
+            "agent": "codex",
+            "agent_session": {"agent": "codex", "value": "thread-1"},
+            "tokens": {"quota_session": "previous summary"}
+        }]}});
+        let mut panes = Vec::new();
+        collect_agent_panes(&value, &mut panes);
+        assert_eq!(panes[0].session_id.as_deref(), Some("thread-1"));
+        assert_eq!(panes[0].session_summary, "previous summary");
+    }
+
+    #[test]
+    fn legacy_metadata_tokens_force_one_bounded_cleanup_report() {
+        let pane = AgentPane {
+            pane_id: "w1:p1".to_string(),
+            provider: Provider::Claude,
+            session_id: None,
+            session_summary: String::new(),
+            topic: String::new(),
+            tokens: BTreeMap::from([(String::from("quota_badge"), String::from("[A]"))]),
+        };
+        let desired = BTreeMap::from([(String::from("quota_state"), String::from("?"))]);
+        assert!(!metadata_matches(&pane.tokens, &desired));
+        let names = metadata_report_names(&pane, &desired);
+        assert!(names.contains(&"quota_badge"));
+        assert!(names.len() <= METADATA_TOKEN_NAMES.len());
     }
 
     #[test]
@@ -521,6 +614,14 @@ mod tests {
     fn extracts_latest_claude_prompt_and_skips_clear_command() {
         let text = "❯ /clear\n❯ hi\n⏺ Hi! What can I help with?\n❯\n";
         assert_eq!(extract_topic(text, Provider::Claude).as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn ignores_codex_default_prompt_placeholder() {
+        assert_eq!(
+            extract_topic("› Ask Codex to do anything\n", Provider::Codex),
+            None
+        );
     }
 
     #[test]
