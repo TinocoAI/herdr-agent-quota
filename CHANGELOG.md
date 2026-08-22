@@ -10,9 +10,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Quota rows now show a compact `reset` ETA: minutes below one hour, hours and
   minutes below one day, and days plus hours for longer windows.
+- Active turns now start one short-lived global refresh watcher for Claude,
+  Codex, Grok, and Agy. It reads the working provider set once per poll,
+  publishes statusLine cache updates, keeps active fetches debounced, stops
+  when all agents settle, and performs final debounced passes per provider.
+  Polling defaults to 60 seconds and is configurable from 30 seconds to one
+  hour. `install.sh` and `uninstall.sh` provide a build/link/configure and
+  restore/unlink workflow for downloaded checkouts.
 
 ### Fixed
 
+- Topic extraction now reads the pane's visible screen instead of rebuilding its
+  wrapped scrollback. The old `--source recent` read took 4.45s and repainted the
+  pane once per call, which is what the user saw as scrolling; `--source visible`
+  costs 0.006s and repaints nothing. The prompt is on screen when a turn starts,
+  which is when the topic changes.
 - Agent events no longer repaint every pane of a provider. Reading a pane makes
   Herdr repaint it, which the user sees as the agent's terminal scrolling up and
   snapping back to the bottom, once on agent detection and twice per turn
@@ -21,6 +33,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A failed or empty topic read now preserves the last published topic instead of
   clearing it, so it no longer churns the token and forces a write on the next
   refresh.
+- The legacy per-tool Grok response hook is no longer installed. Existing
+  plugin-owned copies are removed during configure because the single global
+  watcher now covers active and settled turns without spawning one command per
+  tool call.
 
 - Agent topics now come only from the latest user prompt in pane output. Native
   `Thinking`/`Executing` titles and other AI status text are no longer published

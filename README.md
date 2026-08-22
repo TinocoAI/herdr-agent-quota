@@ -35,12 +35,11 @@ latest user prompt rather than an AI-generated status.*
 - **Fully reversible** — one action sets it up, one action puts your config
   back exactly as it was.
 
-Install the plugin, then apply every reversible integration in one action
+For a downloaded checkout, one command applies every reversible integration
 ([quick start](#quick-start)):
 
 ```sh
-herdr plugin link . --enabled
-herdr plugin action invoke herdr-agent-quota.configure
+./install.sh
 ```
 
 The screenshot is a real local Herdr session. The values and topic text are
@@ -74,18 +73,34 @@ every provider adapter; only the window data differs.
 ## Quick start
 
 Requirements: Herdr `0.8.0+`, Rust `1.95+`, macOS or Linux, and at least one
-supported CLI. From this repository:
+supported CLI. If you downloaded this repository, the one-step installer does
+the build, link, enable, and reversible configuration for you:
+
+```sh
+./install.sh
+```
+
+To restore the previous sidebar/statusLine configuration and unlink the plugin:
+
+```sh
+./uninstall.sh
+```
+
+The scripts are idempotent. They leave the local quota snapshots in Herdr's
+plugin state directory; those contain no credentials and can be removed later
+if desired.
+
+The equivalent Herdr commands are:
 
 ```sh
 herdr plugin link . --enabled
 herdr plugin action invoke herdr-agent-quota.configure
 ```
 
-That is the complete Herdr setup. The first command builds and enables the
-plugin. The second action consistently uses Herdr's plugin state, applies the
+The configure action consistently uses Herdr's plugin state, applies the
 sidebar rows, installs or repairs the reversible Claude and Agy statusLine
-collectors, installs the Grok response hook, and reloads Herdr's config. You can run
-it again safely from Herdr's action menu as **Install / repair agent quota**.
+collectors, and reloads Herdr's config. You can
+run it again safely from Herdr's action menu as **Install / repair agent quota**.
 Use **Refresh agent quota** for a one-shot refresh, or
 press `prefix+shift+r` after configuration. The shortcut force-fetches Codex
 and Grok, then republishes the latest Claude and Agy statusLine snapshots. Run
@@ -98,8 +113,31 @@ herdr plugin action invoke herdr-agent-quota.refresh
 Herdr plugin v1 does not currently let plugins add buttons to the native agent
 group header, so the shortcut is the closest stable one-step entry point.
 Selecting a pane also runs a provider-only refresh, debounced to once per
-minute. That path does not read terminal content, and a pane currently viewing
-scrollback receives no metadata write until it returns to the bottom.
+minute. While any agent is working, one global background watcher polls the
+working provider set once per minute, publishes fresh cache values, and performs
+one final debounced pass when each provider settles. These pulses never read
+terminal content, and a pane currently viewing scrollback receives no metadata
+write until it returns to the bottom.
+
+The default poll interval is 60 seconds. To persist another value (30 seconds to
+one hour), pass it during installation:
+
+```sh
+./install.sh --watch-interval-seconds 300
+```
+
+Or update an existing installation with the same environment override:
+
+```sh
+HERDR_AGENT_QUOTA_WATCH_INTERVAL_SECONDS=300 \
+  herdr plugin action invoke herdr-agent-quota.configure
+```
+
+Each poll uses one global coordination lock and one `herdr agent list` call.
+Provider network fetches are independently capped at one per 60 seconds by the
+existing refresh markers, even if a shorter custom poll interval is requested.
+The watcher never sends prompts, starts a new login, refreshes credentials, or
+consumes model/chat tokens; a manual `--force` refresh is the explicit exception.
 
 Preview the changes without writing anything:
 
@@ -109,7 +147,8 @@ Preview the changes without writing anything:
 
 Remove every plugin-owned config edit and restore previous Claude/Agy
 statusLine commands with the one-click **Uninstall agent quota configuration**
-action, or invoke it from a shell:
+action, or invoke it from a shell (the `./uninstall.sh` wrapper above also
+unlinks the plugin):
 
 ```sh
 herdr plugin action invoke herdr-agent-quota.uninstall
@@ -122,12 +161,9 @@ through plugin actions so all collectors use the same Herdr state directory.
 The setup preserves Herdr's native state dot and plane/tab label. It only adds
 the provider, usage, and topic tokens, so the original Herdr agent indicator is
 not removed. Uninstall removes the plugin-owned rows and restores previous
-Claude and Agy statusLine commands. Setup also installs a silent global Grok hook:
-`PostToolUse` refreshes during long-running turns, while `Stop`, `StopFailure`, and
-`StopCancelled` cover final, failed, and cancelled replies. The hook runs the
-collector directly rather than invoking a Herdr action, and uninstall removes
-only that plugin-owned hook file. Restart existing Grok sessions once after setup
-so they load the new global hook.
+Claude and Agy statusLine commands. Older plugin-owned Grok response hooks are
+removed during configure; the single global watcher now covers Grok as well, so
+long turns no longer start one refresh command per tool call.
 
 ## Supported CLIs
 
@@ -135,7 +171,7 @@ so they load the new global hook.
 | --- | --- | --- | --- |
 | Claude Code `2.1.233` | `5h` + `week` | Official `statusLine` JSON: `rate_limits.five_hour` and `seven_day` | The configure action installs and chains it automatically |
 | OpenAI Codex `0.147.0` | `week` | One-shot local `codex app-server --stdio`, `account/rateLimits/read` | ChatGPT subscription login; API-key mode is shown as unavailable |
-| Grok CLI / Grok Build `1.0.4` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | The configure action installs a silent active-response hook |
+| Grok CLI / Grok Build `1.0.4` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Covered by the unified watcher; no response hook is installed |
 | Agy / Antigravity CLI `1.1.13` | `5h` + `week` | Official `statusLine` JSON `quota` object (`gemini-*` and `3p-*` pools) | The configure action installs and chains it automatically |
 
 Versions above were checked on the development machine on 2026-08-15. The
@@ -145,9 +181,10 @@ strings, so newer compatible CLI releases can continue to work.
 The sidebar shows **percentage remaining** and the time until each reset, not
 token counts. Codex and Grok expose their weekly window. Claude Code and Agy
 expose both five-hour and weekly windows. Reset ETAs use minutes below one hour,
-hours and minutes below one day, and days plus hours above one day. They are
-recalculated on agent events or manual refresh; the sidebar does not run a
-resident minute-by-minute countdown.
+hours and minutes below one day, and days plus hours above one day. During a
+working turn, one short-lived global watcher polls once per configured interval,
+coalesces active fetches, and exits when all selected providers settle. The
+sidebar does not run a permanent daemon.
 
 A failed refresh never replaces a successful cached value with `unavailable`;
 a provider without any successful snapshot is shown as `N/A` until its first
@@ -229,13 +266,16 @@ such as `Thinking` or `Executing`. It does not show the working directory.
 - **Grok:** the local `~/.grok/auth.json` login key is read in memory and sent
   to the weekly billing endpoint used by the Grok CLI. The response is accepted
   only when it identifies a weekly period. This is SuperGrok usage, not xAI
-  developer/API-team billing.
+  developer/API-team billing. The unified watcher and the existing 60-second
+  debounce limit active requests; it never logs in or refreshes the key.
 - **Claude Code:** the official [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline)
   supplies the five-hour and seven-day values. A previous statusLine command is
-  backed up, chained, and restored by the uninstall action.
+  backed up, chained, and restored by the uninstall action; the active-turn
+  watcher republishes each new snapshot without calling Herdr from that hook.
 - **Agy/Antigravity:** the official [`/usage` and statusline docs](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
   supply Gemini and third-party pools. When both pools exist, the sidebar uses
-  the lowest remaining percentage so the single Agy row is conservative.
+  the lowest remaining percentage so the single Agy row is conservative; its
+  statusLine cache is published by the same active-turn watcher.
 
 Snapshots and refresh markers stay in Herdr's plugin state directory. No usage
 data is uploaded, browser cookies or browser keychains are read, and provider
@@ -254,7 +294,7 @@ weekly value instead of clearing the sidebar.
 | Claude or Agy is `N/A` | Start a conversation so the native `statusLine` emits JSON; then refresh. |
 | Claude briefly changes while switching panes | The cached value is retained; run one prompt or a manual refresh if no snapshot exists yet. |
 | Agy has no quota | Run **Install / repair agent quota**, start one Agy turn, then manually refresh. |
-| A running Grok goal stays stale | Run **Install / repair agent quota**, then restart that Grok session once so it loads the updated global hook. |
+| A running Grok goal stays stale | Run **Install / repair agent quota**, then start the next turn; the unified watcher will pick up working sessions. |
 | The topic is blank or old | Send a prompt in that pane; topic extraction runs on agent events and needs recent output. |
 | Existing Claude statusLine is not changed | Run `configure --check`; the plugin refuses unsafe non-command settings instead of overwriting them. |
 

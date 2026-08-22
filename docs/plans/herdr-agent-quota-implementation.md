@@ -17,9 +17,11 @@ active local account's subscription quota in Herdr:
 - Herdr Agents sidebar: a readable provider/status row plus a quota row per agent.
 - Optional read-only terminal pane: expanded quota details and diagnostics.
 
-The plugin must be lightweight. It must not run a resident daemon. Refreshes are
-one-shot commands triggered by Herdr startup, selected agent lifecycle events, or
-the user. Between triggers, the last successful value remains visible indefinitely.
+The plugin must be lightweight. It must not run a permanent resident daemon.
+Refreshes are one-shot commands triggered by Herdr startup, selected agent
+lifecycle events, or the user; one bounded global watcher may run only while an
+agent is working. Between triggers, the last successful value remains visible
+indefinitely.
 
 ## 2. Frozen product decisions
 
@@ -55,7 +57,7 @@ the user. Between triggers, the last successful value remains visible indefinite
 - Multiple accounts for one provider.
 - xAI developer/API-team usage. Grok must show the SuperGrok weekly pool.
 - Browser Cookie, Keychain, or web-page scraping fallbacks.
-- A resident polling daemon, OS service, or scheduled job.
+- A permanent polling daemon, OS service, or scheduled job.
 - Resident minute-by-minute countdowns, `updated N minutes ago`, automatic stale
   transitions, alerts, notifications, or usage history.
 - Windows support.
@@ -175,10 +177,12 @@ Keep the public surface small:
 
 ```text
 herdr-agent-quota refresh [--provider codex|grok|claude|all] [--force] [--json]
+herdr-agent-quota watch [--provider codex|grok|claude|agy|all] [--interval-seconds N]
 herdr-agent-quota event
 herdr-agent-quota dashboard
 herdr-agent-quota configure --check
 herdr-agent-quota configure --apply
+herdr-agent-quota configure --apply --watch-interval-seconds N
 herdr-agent-quota configure --uninstall
 herdr-agent-quota claude-statusline
 herdr-agent-quota agy-statusline
@@ -186,7 +190,12 @@ herdr-agent-quota agy-statusline
 
 - `refresh`: fetch, normalize, cache, and publish quota tokens.
 - `event`: read `HERDR_PLUGIN_EVENT_JSON`, identify affected provider(s), debounce,
-  and call the same refresh service.
+  call the same refresh service, and start one global `watch` pulse for a
+  working turn.
+- `watch`: call `herdr agent list` once per configured interval, publish
+  statusLine cache changes and debounced active fetches for every working
+  provider, perform one final debounced pass when it settles, and exit after a safety
+  cap if Herdr becomes unavailable. It never reads pane output.
 - `dashboard`: render cached values and explicit unavailable reasons; pressing `r`
   may force a refresh, but the pane must not poll automatically.
 - `configure`: manage Herdr rows and the Claude statusLine wrapper.
@@ -207,9 +216,11 @@ Declare one-shot startup and event hooks in `herdr-plugin.toml`:
 - Manual action: force refresh all providers.
 
 Use a state-file timestamp and a cross-process lock to coalesce non-forced provider
-refreshes occurring within 60 seconds. A manual refresh bypasses the timestamp but
-still takes the lock. Do not subscribe to raw output or `pane.updated`; those events
-are too frequent for quota checks. The `pane.focused` path must stay provider-only,
+refreshes occurring within 60 seconds. The active-turn watcher uses one global
+coordination lock and a configurable 60-second poll interval (30 seconds to one
+hour); a manual refresh bypasses the timestamp but still takes the lock. Do not
+subscribe to raw output or `pane.updated`; those events are too frequent for quota
+checks. The `pane.focused` path must stay provider-only,
 must not read pane content, and must skip metadata reports while the pane is in
 scrollback so it cannot recreate the original viewport feedback loop.
 
@@ -455,8 +466,9 @@ Owner scope: `src/herdr.rs`, `src/refresh.rs`, event fixtures, manifest hooks.
 - Discover provider panes from v0.8 JSON output.
 - Map cached provider snapshots to the readable provider/status/summary tokens.
 - Report metadata to every matching pane without altering semantic state.
-- Implement startup, approved event hooks, force refresh, cross-process coalescing,
-  monotonic sequence values, and partial provider failure.
+- Implement startup, approved event hooks, bounded active-turn pulses, force
+  refresh, cross-process coalescing, monotonic sequence values, and partial
+  provider failure.
 
 Exit criterion: mocked Herdr commands prove exact argv/token values; a local Herdr
 smoke test shows different provider quotas on matching agent rows.
@@ -498,7 +510,8 @@ Depends on: packages 2–7.
   their values.
 - Verify startup and each declared Herdr event hook.
 - Kill/exit every short-lived child and confirm no `herdr-agent-quota`, Codex
-  app-server, or dashboard process remains after the relevant command ends.
+  app-server, dashboard, or settled-turn watcher remains after the relevant
+  command ends.
 - Inspect logs and fixtures for bearer tokens, refresh tokens, Cookies, emails, and
   account IDs.
 
@@ -518,7 +531,7 @@ Depends on: package 8 passing.
 - README first sentence:
   `Show Claude Code, Codex, Grok, and Agy subscription usage in Herdr's agent sidebar.`
 - Explain exact data sources, remaining-percentage semantics, single-account scope,
-  no-daemon behavior, retained old values, configuration, uninstall, and provider
+  bounded active-turn behavior, retained old values, configuration, uninstall, and provider
   failure messages.
 - Include a real screenshot with no private workspace or account data.
 - GitHub description:
@@ -572,7 +585,8 @@ The project is done only when all of the following are true:
 - With no further events, the last successful usage remains displayed unchanged.
 - A manual refresh updates all available providers and does not erase old successes
   when one provider fails.
-- No resident background service exists.
+- No permanent background service exists; one active-turn watcher is bounded and
+  stops when all selected providers' agents settle.
 - Config apply is previewable, idempotent, backed up, and precisely reversible.
 - Existing Claude statusLine behavior survives apply and uninstall.
 - No provider credential or browser Cookie is stored, logged, or committed.

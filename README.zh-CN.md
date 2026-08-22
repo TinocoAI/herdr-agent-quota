@@ -32,11 +32,10 @@ Codex、Grok 显示周额度；每张 agent 卡片的话题来自用户最后一
   `unavailable`；API key 登录也不会被当成订阅额度显示。
 - **完全可回滚** —— 一个 action 装好，一个 action 原样还原你的配置。
 
-链接插件后，用一个 action 批量安装所有可恢复的集成（[快速开始](#快速开始)）：
+下载仓库后执行一个命令即可批量安装所有可恢复的集成（[快速开始](#快速开始)）：
 
 ```sh
-herdr plugin link . --enabled
-herdr plugin action invoke herdr-agent-quota.configure
+./install.sh
 ```
 
 截图是真实的 Herdr 本地会话。其中的额度和话题来自当时的会话，
@@ -66,22 +65,57 @@ herdr plugin action invoke herdr-agent-quota.configure
 ## 快速开始
 
 要求：Herdr `0.8.0+`、Rust `1.95+`、macOS 或 Linux，以及至少一个支持的
-CLI。在仓库目录执行：
+CLI。下载仓库后，在目录中执行下面的一键安装命令即可完成构建、链接、启用和
+可恢复配置：
+
+```sh
+./install.sh
+```
+
+恢复原来的 sidebar/statusLine 配置并解除插件链接：
+
+```sh
+./uninstall.sh
+```
+
+两个脚本都可以重复执行。卸载会保留 Herdr 插件 state 中的本地额度快照（不含
+凭证）；如需释放磁盘空间可再手动删除。
+
+等价的 Herdr 命令是：
 
 ```sh
 herdr plugin link . --enabled
 herdr plugin action invoke herdr-agent-quota.configure
 ```
 
-以上就是完整配置流程。第一条命令构建并启用插件；第二个 action 会统一使用
-Herdr 的插件 state 目录，批量写入 sidebar 行、安装或修复可恢复的 Claude/Agy
-statusLine 采集器、安装 Grok 回复 hook，并自动 reload 配置。之后可随时在 Herdr
-action 菜单执行 **Install / repair agent quota**，重复执行也是安全的。需要手动
-刷新时执行 **Refresh agent quota**。
+configure action 会统一使用 Herdr 的插件 state 目录，批量写入 sidebar 行、安装
+或修复可恢复的 Claude/Agy statusLine 采集器，并自动 reload 配置。之后可随时在
+Herdr action 菜单执行 **Install / repair agent quota**，重复
+执行也是安全的。需要手动刷新时执行 **Refresh agent quota**。
 
 选中一个 pane 时也会触发该 provider 的额度刷新，60 秒内自动合并重复请求。
-这条路径不会读取终端内容；如果 pane 正在查看 scrollback，则暂缓 metadata
-写入，回到底部后再补上，避免刷新把 viewport 拉走。
+进入 working 后，插件只启动一个全局短生命周期 watcher：每轮只调用一次
+`herdr agent list`，统一找出所有 working provider，再批量发布缓存并按相同去抖规则
+查询 Codex/Grok；每个 provider 结束时再按去抖规则补一次。
+这条路径不会读取终端内容；如果 pane 正在查看 scrollback，则暂缓 metadata 写入，
+回到底部后再补上，避免刷新把 viewport 拉走。默认轮询间隔为 60 秒，可在安装时自定义
+为 30 秒到 1 小时：
+
+```sh
+./install.sh --watch-interval-seconds 300
+```
+
+已有安装也可以这样更新间隔：
+
+```sh
+HERDR_AGENT_QUOTA_WATCH_INTERVAL_SECONDS=300 \
+  herdr plugin action invoke herdr-agent-quota.configure
+```
+
+每轮只使用一个全局协调锁和一次 `herdr agent list`。各 provider 的网络查询仍由
+原有刷新标记独立限制为每 60 秒最多一次，即使用户把轮询间隔设得更短也不会突破。
+watcher 不发送 prompt、不重新登录、不刷新凭证，也不会消耗模型/对话 token；只有用户
+明确执行手动 `--force` 刷新时才绕过这层去抖。
 
 只查看配置变更、不写入文件：
 
@@ -108,10 +142,10 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会
 
 | CLI | 侧栏显示 | 本地数据来源 | 额外配置 |
 | --- | --- | --- | --- |
-| Claude Code `2.1.233` | `5h` + `week` | 官方 `statusLine` JSON：`rate_limits.five_hour`、`seven_day` | 配置 action 自动安装并串联原命令 |
-| OpenAI Codex `0.147.0` | `week` | 一次性的 `codex app-server --stdio`，调用 `account/rateLimits/read` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用 |
-| Grok CLI / Grok Build `1.0.4` | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 配置 action 安装运行中与回合结束 hook |
-| Agy / Antigravity CLI `1.1.13` | `5h` + `week` | 官方 `statusLine` JSON 的 `quota`（`gemini-*`、`3p-*`） | 配置 action 自动安装并串联原命令 |
+| Claude Code `2.1.233` | `5h` + `week` | 官方 `statusLine` JSON：`rate_limits.five_hour`、`seven_day` | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
+| OpenAI Codex `0.147.0` | `week` | 一次性的 `codex app-server --stdio`，调用 `account/rateLimits/read` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用；turn 中由统一 watcher 去抖查询 |
+| Grok CLI / Grok Build `1.0.4` | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 由统一 watcher 处理，不再安装回复 hook |
+| Agy / Antigravity CLI `1.1.13` | `5h` + `week` | 官方 `statusLine` JSON 的 `quota`（`gemini-*`、`3p-*`） | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
 
 上面的版本是 2026-08-15 在开发机上实际检查的版本。解析器按照供应商的
 字段工作，不会把这些版本号写死；兼容的新版本可以继续使用。
@@ -127,7 +161,8 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会
 
 Codex 和 Grok 提供周额度；Claude Code 和 Agy 提供 5 小时额度与周额度。
 不到一小时显示分钟，不到一天显示小时和分钟，超过一天显示天和小时。
-侧栏数值在 agent 事件或手动刷新时重新计算，不是常驻的逐分钟跳动倒计时。
+侧栏数值在 agent 事件、working turn 的短生命周期刷新脉冲或手动刷新时重新计算，
+不是常驻的逐分钟跳动倒计时。
 刷新失败时，插件会保留上一次成功的缓存值，不会把旧值清空为
 `unavailable`。从未成功采集过的 provider 才会显示 `N/A`。
 
@@ -198,17 +233,16 @@ Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 
   ChatGPT 订阅额度。
 - **Grok：** 在内存中读取本地 `~/.grok/auth.json` 登录 key，访问 Grok CLI
   使用的周额度接口。只有明确标记为 weekly 的响应才会接受。这是
-  SuperGrok 订阅额度，不是 xAI 开发者/API team 账单。`PostToolUse` 会在
-  长任务的工具调用之间刷新，`Stop`/`StopFailure`/`StopCancelled` 覆盖最终、
-  失败和取消的回复；hook 直接运行采集器，不经过 Herdr action。
+  SuperGrok 订阅额度，不是 xAI 开发者/API team 账单。统一 watcher 配合原有
+  60 秒去抖查询额度，不会反复登录、刷新登录 key，也不会消耗对话 token。
 - **Claude Code：** 使用官方
   [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline) 提供
   5 小时和 7 天额度。原有 statusLine 会被备份、串联，并可由
-  卸载 action 恢复。
+  卸载 action 恢复；working turn 中由统一 watcher 发布新缓存。
 - **Agy/Antigravity：** 使用官方
   [`/usage` 和 statusline 文档](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
   中的 Gemini 和第三方额度池。两个额度池同时存在时，取较低的剩余百分比，
-  让单个 Agy 行保持保守。
+  让单个 Agy 行保持保守，working turn 中同样由统一 watcher 发布缓存。
 
 快照和刷新标记保存在 Herdr 插件状态目录中。插件不会上传使用数据，不读取
 浏览器 Cookie/Keychain，不刷新或写入 provider 凭据。provider 失败时保留
@@ -225,7 +259,7 @@ Grok CLI 的额度接口属于 CLI 内部契约，不是 xAI 面向开发者的�
 | Claude 或 Agy 显示 `N/A` | 发起一次对话，让原生 `statusLine` 产生 JSON，然后刷新。 |
 | 切换 pane 时 Claude 短暂变化 | 已有缓存会保留；如果还没有快照，发送一次 prompt 或手动刷新。 |
 | Agy 没有额度 | 执行 **Install / repair agent quota**，完成一次 Agy 对话后再手动刷新。 |
-| 运行中的 Grok goal 额度不更新 | 执行 **Install / repair agent quota** 后重启一次该 Grok session，让它加载新的全局 hook。 |
+| 任一运行中的 turn 额度不更新 | 执行 **Install / repair agent quota**，下一次 working turn 会自动启动统一 watcher，回合结束时还会按去抖规则补一次。 |
 | 话题为空或没有更新 | 在该 pane 发送 prompt；话题提取依赖 agent 事件和最近输出。 |
 | 原有 Claude statusLine 没有被修改 | 执行 `configure --check`；对于不能安全串联的配置，插件会拒绝覆盖。 |
 

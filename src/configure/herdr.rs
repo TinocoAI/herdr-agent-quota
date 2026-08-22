@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 const QUOTA_ROW_MARKERS: [&str; 18] = [
@@ -27,6 +27,7 @@ const ROW_GAP_MARKER: &str = "herdr-agent-quota";
 const PROVIDER_STYLE_MARKER: &str = "herdr-agent-quota-provider";
 const REFRESH_KEY: &str = "prefix+shift+r";
 const REFRESH_ACTION: &str = "herdr-agent-quota.refresh";
+const CONFIG_PRESENCE_FILE: &str = "herdr-config.original.present";
 const QUOTA_SAFE_COLOR: &str = "#84b084";
 const QUOTA_WARNING_COLOR: &str = "#cdaa65";
 const QUOTA_DANGER_COLOR: &str = "#ca6470";
@@ -55,20 +56,14 @@ pub fn check() -> Result<()> {
 
 pub fn apply() -> Result<()> {
     let path = config_path()?;
+    let existed = path.exists();
     let original = fs::read_to_string(&path).unwrap_or_default();
     let updated = add_quota_row(&original)?;
     if updated == original {
         return Ok(());
     }
-    if !original.is_empty() {
-        if let Some(backup) = backup_path()? {
-            if let Some(parent) = backup.parent() {
-                fs::create_dir_all(parent).context("create plugin state directory")?;
-            }
-            if !backup.exists() {
-                fs::write(backup, &original).context("write Herdr config backup")?;
-            }
-        }
+    if let Some(backup) = backup_path()? {
+        write_backup(&backup, &original, existed)?;
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("create Herdr config directory")?;
@@ -80,18 +75,31 @@ pub fn apply() -> Result<()> {
 
 pub fn uninstall() -> Result<()> {
     let path = config_path()?;
-    if !path.exists() {
-        return Ok(());
-    }
-    let original = fs::read_to_string(&path).context("read Herdr config")?;
-    let updated = remove_quota_row(&original)?;
-    if updated != original {
-        fs::write(&path, updated).context("remove quota sidebar row")?;
-        println!("Removed quota sidebar row from {}", path.display());
+    if path.exists() {
+        let original = fs::read_to_string(&path).context("read Herdr config")?;
+        let updated = reversible_backup(&original)?.unwrap_or(remove_quota_row(&original)?);
+        let originally_absent = backup_presence_path()?
+            .and_then(|path| fs::read_to_string(path).ok())
+            .is_some_and(|value| value.trim() == "absent");
+        if originally_absent && updated.is_empty() {
+            fs::remove_file(&path).context("remove empty Herdr config")?;
+            println!(
+                "Removed quota sidebar configuration from {}",
+                path.display()
+            );
+        } else if updated != original {
+            fs::write(&path, updated).context("remove quota sidebar row")?;
+            println!("Removed quota sidebar row from {}", path.display());
+        }
     }
     if let Some(backup) = backup_path()? {
         if backup.exists() {
             fs::remove_file(backup).context("remove Herdr config backup")?;
+        }
+        if let Some(presence) = backup_presence_path()? {
+            if presence.exists() {
+                fs::remove_file(presence).context("remove Herdr config backup marker")?;
+            }
         }
     }
     Ok(())
@@ -108,6 +116,40 @@ pub fn config_path() -> Result<PathBuf> {
 fn backup_path() -> Result<Option<PathBuf>> {
     let state = std::env::var_os("HERDR_PLUGIN_STATE_DIR");
     Ok(state.map(|directory| PathBuf::from(directory).join("herdr-config.original.toml")))
+}
+
+fn backup_presence_path() -> Result<Option<PathBuf>> {
+    Ok(std::env::var_os("HERDR_PLUGIN_STATE_DIR")
+        .map(PathBuf::from)
+        .map(|directory| directory.join(CONFIG_PRESENCE_FILE)))
+}
+
+fn write_backup(path: &Path, original: &str, existed: bool) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).context("create plugin state directory")?;
+    }
+    if !path.exists() {
+        fs::write(path, original).context("write Herdr config backup")?;
+        if let Some(marker) = backup_presence_path()? {
+            fs::write(marker, if existed { "present" } else { "absent" })
+                .context("write Herdr config backup marker")?;
+        }
+    }
+    Ok(())
+}
+
+fn reversible_backup(current: &str) -> Result<Option<String>> {
+    let Some(path) = backup_path()? else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    let original = fs::read_to_string(&path).context("read Herdr config backup")?;
+    if add_quota_row(&original)? == current {
+        return Ok(Some(original));
+    }
+    Ok(None)
 }
 
 pub fn add_quota_row(input: &str) -> Result<String> {
@@ -154,6 +196,9 @@ pub fn add_quota_row(input: &str) -> Result<String> {
 pub fn remove_quota_row(input: &str) -> Result<String> {
     if input.trim().is_empty() {
         return Ok(input.to_string());
+    }
+    if add_quota_row("")?.as_str() == input {
+        return Ok(String::new());
     }
     let mut document = input
         .parse::<DocumentMut>()
@@ -565,5 +610,11 @@ claude = [["state_icon", "agent"]]
         let removed = remove_quota_row(&updated).unwrap();
         assert!(removed.contains("claude = [[\"state_icon\", \"agent\"]]"));
         assert!(!removed.contains("codex ="));
+    }
+
+    #[test]
+    fn empty_sidebar_configuration_round_trips_to_empty() {
+        let updated = add_quota_row("").unwrap();
+        assert_eq!(remove_quota_row(&updated).unwrap(), "");
     }
 }

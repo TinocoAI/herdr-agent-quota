@@ -33,7 +33,42 @@ pub struct AgentPane {
     pub tokens: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AgentState {
+    pub panes: Vec<AgentPane>,
+    pub working_providers: Vec<Provider>,
+}
+
 pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
+    Ok(list_agent_state()?.panes)
+}
+
+/// Read Herdr's agent inventory once and derive both panes and working
+/// providers from that same response. The active-turn watcher uses this
+/// combined view so one poll does not fan out into one `agent list` call per
+/// provider.
+pub fn list_agent_state() -> Result<AgentState> {
+    let value = list_agent_value()?;
+    let mut panes = Vec::new();
+    collect_agent_panes(&value, &mut panes);
+    panes.sort_by(|left, right| left.pane_id.cmp(&right.pane_id));
+    panes.dedup_by(|left, right| left.pane_id == right.pane_id);
+    Ok(AgentState {
+        panes,
+        working_providers: working_providers_from(&value),
+    })
+}
+
+/// Return whether at least one pane for a provider is currently working.
+///
+/// This provider-specific helper only asks Herdr for agent metadata; it never
+/// reads terminal output. The global watcher uses [`list_agent_state`] so all
+/// providers share one inventory call per poll.
+pub fn provider_has_working_agent(provider: Provider) -> Result<bool> {
+    Ok(list_agent_state()?.working_providers.contains(&provider))
+}
+
+fn list_agent_value() -> Result<Value> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let output = Command::new(&executable)
         .args(["agent", "list"])
@@ -42,12 +77,7 @@ pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
     if !output.status.success() {
         anyhow::bail!("Herdr agent list failed with {}", output.status);
     }
-    let value: Value = serde_json::from_slice(&output.stdout).context("parse Herdr agent list")?;
-    let mut panes = Vec::new();
-    collect_agent_panes(&value, &mut panes);
-    panes.sort_by(|left, right| left.pane_id.cmp(&right.pane_id));
-    panes.dedup_by(|left, right| left.pane_id == right.pane_id);
-    Ok(panes)
+    serde_json::from_slice(&output.stdout).context("parse Herdr agent list")
 }
 
 pub fn current_agent_provider() -> Result<Option<Provider>> {
@@ -130,6 +160,57 @@ fn collect_agent_panes(value: &Value, panes: &mut Vec<AgentPane>) {
         Value::Array(values) => {
             for child in values {
                 collect_agent_panes(child, panes);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn working_providers_from(value: &Value) -> Vec<Provider> {
+    let mut providers = Vec::new();
+    collect_working_providers(value, &mut providers);
+    providers.sort_by_key(|provider| {
+        Provider::ALL
+            .iter()
+            .position(|candidate| candidate == provider)
+    });
+    providers.dedup();
+    providers
+}
+
+fn collect_working_providers(value: &Value, providers: &mut Vec<Provider>) {
+    match value {
+        Value::Object(map) => {
+            let kind = map
+                .get("agent")
+                .and_then(Value::as_str)
+                .or_else(|| map.get("kind").and_then(Value::as_str))
+                .or_else(|| {
+                    map.get("agent_session")
+                        .and_then(Value::as_object)
+                        .and_then(|session| session.get("agent"))
+                        .and_then(Value::as_str)
+                });
+            let status = map
+                .get("agent_status")
+                .or_else(|| map.get("agentStatus"))
+                .or_else(|| map.get("status"))
+                .or_else(|| map.get("state"))
+                .and_then(Value::as_str);
+            if let (Some(kind), Some(status)) = (kind, status) {
+                if status.eq_ignore_ascii_case("working") {
+                    if let Ok(provider) = kind.parse::<Provider>() {
+                        providers.push(provider);
+                    }
+                }
+            }
+            for child in map.values() {
+                collect_working_providers(child, providers);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                collect_working_providers(child, providers);
             }
         }
         _ => {}
@@ -285,19 +366,21 @@ fn insert_optional_token(tokens: &mut BTreeMap<String, String>, name: &str, valu
     }
 }
 
+// `recent` rebuilds the pane's wrapped scrollback, which takes seconds and
+// repaints the pane: the agent's terminal visibly scrolls, once per read.
+// `visible` is the current screen only, costs microseconds, and repaints
+// nothing. The prompt is on screen at the moment idle->working fires, which is
+// exactly when the topic changes; later in the turn it may have scrolled off,
+// and then the caller keeps the topic it already published.
+fn topic_read_args(pane_id: &str) -> [&str; 7] {
+    [
+        "pane", "read", pane_id, "--source", "visible", "--format", "text",
+    ]
+}
+
 fn read_pane_topic(executable: &std::ffi::OsStr, pane: &AgentPane) -> Option<String> {
     let output = Command::new(executable)
-        .args([
-            "pane",
-            "read",
-            &pane.pane_id,
-            "--source",
-            "recent",
-            "--lines",
-            "160",
-            "--format",
-            "text",
-        ])
+        .args(topic_read_args(&pane.pane_id))
         .output()
         .ok()?;
     if !output.status.success() {
@@ -410,6 +493,25 @@ mod tests {
     }
 
     #[test]
+    fn working_agent_detection_handles_herdr_agent_list_shape() {
+        let value = json!({"result": {"agents": [
+            {"agent": "claude", "agent_status": "working"},
+            {"agent": "codex", "agent_status": "idle"}
+        ]}});
+        assert_eq!(working_providers_from(&value), vec![Provider::Claude]);
+    }
+
+    #[test]
+    fn one_agent_inventory_deduplicates_working_providers() {
+        let value = json!({"result": {"agents": [
+            {"agent": "codex", "agent_status": "working"},
+            {"agent_session": {"agent": "codex"}, "status": "working"},
+            {"agent": "claude", "agent_status": "idle"}
+        ]}});
+        assert_eq!(working_providers_from(&value), vec![Provider::Codex]);
+    }
+
+    #[test]
     fn extracts_latest_agy_prompt_instead_of_status_line() {
         let text = "> older\nHello\n> hi\nHello!\n> Accept-edits mode: file edits auto-approved\n";
         assert_eq!(extract_topic(text, Provider::Agy).as_deref(), Some("hi"));
@@ -457,6 +559,16 @@ mod tests {
             extract_topic(text, Provider::Grok).as_deref(),
             Some("/goal 你在 ti 工作区接手 L7")
         );
+    }
+
+    // `recent` and `recent-unwrapped` rebuild the pane's wrapped scrollback,
+    // which repaints it: one read, one visible scroll for the user.
+    #[test]
+    fn topic_reads_never_rebuild_a_pane_scrollback() {
+        let args = topic_read_args("w1:p1");
+        assert!(args.contains(&"visible"));
+        assert!(!args.contains(&"recent"));
+        assert!(!args.contains(&"recent-unwrapped"));
     }
 
     #[test]
