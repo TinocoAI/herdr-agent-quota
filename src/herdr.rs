@@ -6,13 +6,14 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 const METADATA_TTL_MS: &str = "86400000";
+const MAX_METADATA_TOKENS: usize = 16;
 const METADATA_TOKEN_NAMES: [&str; 16] = [
     "quota_state",
-    "quota_icon",
     "quota_provider",
-    "quota_status",
     "quota_summary",
     "quota_context",
+    "quota_cache",
+    "quota_cache_ttl",
     "quota_5h",
     "quota_5h_normal",
     "quota_5h_warning",
@@ -24,6 +25,7 @@ const METADATA_TOKEN_NAMES: [&str; 16] = [
     "quota_topic",
     "quota_error",
 ];
+const OBSOLETE_METADATA_TOKEN_NAMES: [&str; 2] = ["quota_icon", "quota_status"];
 const LEGACY_METADATA_TOKEN_NAMES: [&str; 2] = ["quota_badge", "quota_session"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,12 +316,12 @@ fn pane_is_scrolled(executable: &std::ffi::OsStr, pane_id: &str) -> bool {
 fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, String> {
     let mut tokens = BTreeMap::from([
         ("quota_state".to_string(), values.quota_state.clone()),
-        ("quota_icon".to_string(), values.quota_icon.clone()),
         ("quota_provider".to_string(), values.quota_provider.clone()),
-        ("quota_status".to_string(), values.quota_status.clone()),
         ("quota_summary".to_string(), values.quota_summary.clone()),
     ]);
     insert_optional_token(&mut tokens, "quota_context", &values.quota_context);
+    insert_optional_token(&mut tokens, "quota_cache", &values.quota_cache);
+    insert_optional_token(&mut tokens, "quota_cache_ttl", &values.quota_cache_ttl);
     insert_optional_token(&mut tokens, "quota_5h", &values.quota_5h);
     insert_severity_token(
         &mut tokens,
@@ -356,6 +358,9 @@ fn metadata_matches(
     METADATA_TOKEN_NAMES
         .into_iter()
         .all(|name| current.get(name) == desired.get(name))
+        && OBSOLETE_METADATA_TOKEN_NAMES
+            .into_iter()
+            .all(|name| !current.contains_key(name))
         && LEGACY_METADATA_TOKEN_NAMES
             .into_iter()
             .all(|name| !current.contains_key(name))
@@ -369,29 +374,51 @@ fn metadata_report_names(
         .into_iter()
         .filter(|name| desired.contains_key(*name) || pane.tokens.contains_key(*name))
         .collect::<Vec<_>>();
-    names.extend(
-        LEGACY_METADATA_TOKEN_NAMES
-            .into_iter()
-            .filter(|name| pane.tokens.contains_key(*name)),
-    );
-    if names.len() <= METADATA_TOKEN_NAMES.len() {
+    let cleanup_names = OBSOLETE_METADATA_TOKEN_NAMES
+        .into_iter()
+        .filter(|name| pane.tokens.contains_key(*name))
+        .chain(
+            LEGACY_METADATA_TOKEN_NAMES
+                .into_iter()
+                .filter(|name| pane.tokens.contains_key(*name)),
+        )
+        .collect::<Vec<_>>();
+    if names.len() + cleanup_names.len() <= MAX_METADATA_TOKENS {
+        names.extend(cleanup_names);
         return names;
     }
 
-    // A pane upgraded from the pre-context token set can briefly contain all
-    // old and new names. Keep the new context token and clear legacy names in
-    // the same bounded report; a stable summary/status token can be refreshed
-    // on the following poll if necessary.
-    for candidate in ["quota_summary", "quota_status", "quota_icon"] {
-        let Some(index) = names.iter().position(|name| *name == candidate) else {
-            continue;
-        };
-        if pane.tokens.get(candidate) == desired.get(candidate) {
+    // Herdr accepts at most sixteen token arguments. Reserve room for stale
+    // names first so an upgraded pane can actually clear them; unchanged
+    // cosmetic fields can be restored on the next bounded report.
+    let active_capacity = MAX_METADATA_TOKENS.saturating_sub(cleanup_names.len());
+    for candidate in ["quota_summary", "quota_state", "quota_5h", "quota_week"] {
+        while names.len() > active_capacity {
+            let Some(index) = names.iter().position(|name| {
+                *name == candidate && pane.tokens.get(candidate) == desired.get(candidate)
+            }) else {
+                break;
+            };
             names.remove(index);
-            break;
         }
     }
-    names.truncate(METADATA_TOKEN_NAMES.len());
+    while names.len() > active_capacity {
+        let Some(index) = names.iter().position(|name| {
+            !matches!(
+                *name,
+                "quota_context"
+                    | "quota_cache"
+                    | "quota_cache_ttl"
+                    | "quota_provider"
+                    | "quota_topic"
+            )
+        }) else {
+            break;
+        };
+        names.remove(index);
+    }
+    names.truncate(active_capacity);
+    names.extend(cleanup_names);
     names
 }
 
@@ -582,7 +609,98 @@ mod tests {
         assert!(!metadata_matches(&pane.tokens, &desired));
         let names = metadata_report_names(&pane, &desired);
         assert!(names.contains(&"quota_badge"));
-        assert!(names.len() <= METADATA_TOKEN_NAMES.len());
+        assert!(names.len() <= MAX_METADATA_TOKENS);
+    }
+
+    #[test]
+    fn cache_diagnostics_stay_inside_herdr_metadata_cap() {
+        let snapshot = crate::model::ProviderSnapshot::new(
+            Provider::Claude,
+            vec![
+                crate::model::UsageWindow::new(crate::model::WindowKind::FiveHour, 20.0, None)
+                    .unwrap(),
+                crate::model::UsageWindow::new(crate::model::WindowKind::Weekly, 30.0, None)
+                    .unwrap(),
+            ],
+            0,
+        )
+        .with_context(Some(
+            crate::model::ContextUsage::new(42.0)
+                .unwrap()
+                .with_cache(Some(
+                    crate::model::CacheUsage::from_token_counts(100, 800, 100)
+                        .unwrap()
+                        .with_ttl_estimate(3_600, 0)
+                        .with_session_totals(
+                            crate::model::CacheTotals::from_token_counts(100, 800, 100),
+                            "session-1",
+                            1,
+                        ),
+                )),
+        ));
+        let desired = desired_tokens(&MetadataTokens::from_snapshot(&snapshot, 0), "prompt");
+        let pane = AgentPane {
+            pane_id: "w1:p1".to_string(),
+            provider: Provider::Claude,
+            session_id: None,
+            session_summary: String::new(),
+            topic: String::new(),
+            tokens: BTreeMap::new(),
+        };
+        let names = metadata_report_names(&pane, &desired);
+        assert!(names.len() <= MAX_METADATA_TOKENS);
+        assert!(names.contains(&"quota_cache"));
+        assert!(names.contains(&"quota_cache_ttl"));
+    }
+
+    #[test]
+    fn stale_metadata_tokens_are_reported_for_cleanup_with_new_cache_rows() {
+        let snapshot = crate::model::ProviderSnapshot::new(
+            Provider::Claude,
+            vec![
+                crate::model::UsageWindow::new(crate::model::WindowKind::FiveHour, 20.0, None)
+                    .unwrap(),
+                crate::model::UsageWindow::new(crate::model::WindowKind::Weekly, 30.0, None)
+                    .unwrap(),
+            ],
+            0,
+        )
+        .with_context(Some(
+            crate::model::ContextUsage::new(42.0)
+                .unwrap()
+                .with_cache(Some(
+                    crate::model::CacheUsage::from_token_counts(100, 800, 100)
+                        .unwrap()
+                        .with_ttl_estimate(3_600, 0)
+                        .with_session_totals(
+                            crate::model::CacheTotals::from_token_counts(100, 800, 100),
+                            "session-1",
+                            1,
+                        ),
+                )),
+        ));
+        let desired = desired_tokens(&MetadataTokens::from_snapshot(&snapshot, 0), "prompt");
+        let mut tokens = desired.clone();
+        tokens.insert("quota_icon".to_string(), "✦Cl".to_string());
+        tokens.insert("quota_status".to_string(), "OK".to_string());
+        tokens.insert("quota_badge".to_string(), "[C]".to_string());
+        tokens.insert("quota_session".to_string(), "old".to_string());
+        let pane = AgentPane {
+            pane_id: "w1:p1".to_string(),
+            provider: Provider::Claude,
+            session_id: None,
+            session_summary: String::new(),
+            topic: String::new(),
+            tokens,
+        };
+        let names = metadata_report_names(&pane, &desired);
+        assert!(names.len() <= MAX_METADATA_TOKENS);
+        assert!(names.contains(&"quota_cache"));
+        assert!(names.contains(&"quota_cache_ttl"));
+        assert!(names.contains(&"quota_icon"));
+        assert!(names.contains(&"quota_status"));
+        assert!(names.contains(&"quota_badge"));
+        assert!(names.contains(&"quota_session"));
     }
 
     #[test]

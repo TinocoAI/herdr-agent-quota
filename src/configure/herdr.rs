@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 20] = [
+const QUOTA_ROW_MARKERS: [&str; 22] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
@@ -12,6 +12,8 @@ const QUOTA_ROW_MARKERS: [&str; 20] = [
     "$quota_summary",
     "$quota_session",
     "$quota_context",
+    "$quota_cache",
+    "$quota_cache_ttl",
     "$quota_topic",
     "$quota_5h",
     "$quota_week",
@@ -34,6 +36,8 @@ const QUOTA_SAFE_COLOR: &str = "#84b084";
 const QUOTA_WARNING_COLOR: &str = "#cdaa65";
 const QUOTA_DANGER_COLOR: &str = "#ca6470";
 const CONTEXT_COLOR: &str = "#9b8fd8";
+const CACHE_COLOR: &str = "#6fb5b7";
+const CACHE_TTL_COLOR: &str = "#cdaa65";
 const PROVIDER_STYLES: [(&str, Option<&str>); 4] = [
     ("claude", Some("#c47f6a")),
     ("codex", Some("#7998b7")),
@@ -478,20 +482,34 @@ fn append_quota_rows(rows: &mut Array) {
     *rows = compacted_rows;
 
     let official_index = rows.iter().position(|row| {
-        row.as_array().is_some_and(|items| {
-            items.iter().any(|item| item.as_str() == Some("state_icon"))
-                && !items.iter().any(|item| item.as_str() == Some("agent"))
-        })
+        row.as_array()
+            .is_some_and(|items| items.iter().any(|item| item.as_str() == Some("state_icon")))
     });
 
     if let Some(index) = official_index {
         if let Some(row) = rows.get_mut(index).and_then(Value::as_array_mut) {
-            row.push(styled_token(
-                "$quota_provider",
-                None,
-                Some(true),
-                Some(false),
-            ));
+            if !row
+                .iter()
+                .any(|item| matches!(item.as_str(), Some("agent") | Some("$quota_provider")))
+            {
+                row.push(styled_token(
+                    "$quota_provider",
+                    None,
+                    Some(true),
+                    Some(false),
+                ));
+            }
+            if !row
+                .iter()
+                .any(|item| configured_token_name(item) == Some("$quota_context"))
+            {
+                row.push(styled_token(
+                    "$quota_context",
+                    Some(CONTEXT_COLOR),
+                    Some(true),
+                    Some(false),
+                ));
+            }
         }
     }
 
@@ -503,8 +521,15 @@ fn append_quota_rows(rows: &mut Array) {
     )));
 
     rows.push(Value::Array(styled_row(
-        "$quota_context",
-        Some(CONTEXT_COLOR),
+        "$quota_cache",
+        Some(CACHE_COLOR),
+        Some(true),
+        Some(false),
+    )));
+
+    rows.push(Value::Array(styled_row(
+        "$quota_cache_ttl",
+        Some(CACHE_TTL_COLOR),
         Some(true),
         Some(false),
     )));

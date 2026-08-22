@@ -98,10 +98,16 @@ longer sent as a separate metadata value:
 
 - `$quota_badge`: retired cleanup marker; it is no longer published.
 - `$quota_state`: `●`, `▲`, `!`, or `?`.
-- `$quota_icon`: compact text markers `◈C`, `✕G`, `✦Cl`, or `△Ag`.
+- `$quota_icon`: retired cleanup marker; native Herdr state plus provider name
+  replaces this redundant value.
 - `$quota_provider`: `Codex`, `Grok`, `Claude`, or `Agy` for custom layouts.
-- `$quota_status`: `OK`, `WARN`, `LOW`, or `N/A`.
+- `$quota_status`: retired cleanup marker; quota window rows carry the visible
+  health color.
 - `$quota_context`: provider-reported context-used percentage when available.
+- `$quota_cache`: one-decimal cumulative cache hit rate for the main session
+  transcript when a session boundary is available.
+- `$quota_cache_ttl`: elapsed time since the latest cache-bearing response and
+  an explicitly approximate provider TTL estimate when supported.
 - `$quota_5h`: compact five-hour remaining value and reset ETA when exposed.
 - `$quota_week`: compact weekly remaining value and reset ETA.
 - `$quota_summary`: window-driven compact remaining values and reset ETAs.

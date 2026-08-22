@@ -80,7 +80,27 @@ impl CacheStore {
     /// StatusLine payloads may temporarily omit context (before the first
     /// response and immediately after compaction). Keep the last known value
     /// while still replacing the quota windows with the newest snapshot.
-    pub fn save_preserving_context(&self, mut snapshot: ProviderSnapshot) -> Result<()> {
+    pub fn save_preserving_context(&self, snapshot: ProviderSnapshot) -> Result<()> {
+        self.save_preserving_context_for_session(snapshot, None)
+    }
+
+    /// Save a statusLine snapshot while matching preserved diagnostics to the
+    /// session id from the same stdin payload. This keeps a compacted Claude
+    /// session's aggregate offset without carrying it into a new session.
+    pub fn save_preserving_context_for_session(
+        &self,
+        mut snapshot: ProviderSnapshot,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        if let Some(session_id) = session_id {
+            if let Some(cache) = snapshot
+                .context
+                .as_mut()
+                .and_then(|context| context.cache.as_mut())
+            {
+                cache.session_id = Some(session_id.to_string());
+            }
+        }
         // A malformed/temporarily unreadable old snapshot must not prevent a
         // fresh statusLine value from replacing it.
         if let Some(previous) = self
@@ -90,18 +110,68 @@ impl CacheStore {
             .and_then(|snapshot| snapshot.context)
         {
             match (&mut snapshot.context, previous) {
-                (None, previous) => snapshot.context = Some(previous),
+                (None, mut previous) => {
+                    let same_session = session_id.is_some_and(|session_id| {
+                        previous
+                            .cache
+                            .as_ref()
+                            .and_then(|cache| cache.session_id.as_deref())
+                            == Some(session_id)
+                    });
+                    if !same_session {
+                        if let Some(cache) = previous.cache.as_mut() {
+                            let clear_ttl = cache.session_id.is_some() || session_id.is_some();
+                            strip_session_cache_state(cache, clear_ttl);
+                        }
+                    }
+                    snapshot.context = Some(previous);
+                }
                 (Some(current), previous) => {
                     if current.cache.is_none() {
-                        current.cache = previous.cache;
+                        let same_session = session_id.is_some_and(|session_id| {
+                            previous
+                                .cache
+                                .as_ref()
+                                .and_then(|cache| cache.session_id.as_deref())
+                                == Some(session_id)
+                        });
+                        let mut previous_cache = previous.cache;
+                        if !same_session {
+                            if let Some(cache) = previous_cache.as_mut() {
+                                strip_session_cache_state(
+                                    cache,
+                                    cache.session_id.is_some() || session_id.is_some(),
+                                );
+                            }
+                        }
+                        current.cache = previous_cache;
                     } else if let (Some(cache), Some(previous_cache)) =
                         (&mut current.cache, previous.cache)
                     {
-                        if cache.ttl_seconds.is_none() {
-                            cache.ttl_seconds = previous_cache.ttl_seconds;
+                        let same_session = cache.session_id.is_some()
+                            && cache.session_id == previous_cache.session_id
+                            && session_id.is_none_or(|session_id| {
+                                cache.session_id.as_deref() == Some(session_id)
+                            });
+                        if same_session {
+                            if cache.session_totals.is_none() {
+                                cache.session_totals = previous_cache.session_totals;
+                            }
+                            if cache.transcript_offset == 0 {
+                                cache.transcript_offset = previous_cache.transcript_offset;
+                            }
                         }
-                        if cache.last_activity_unix.is_none() {
-                            cache.last_activity_unix = previous_cache.last_activity_unix;
+                        let can_preserve_ttl = same_session
+                            || (session_id.is_none()
+                                && cache.session_id.is_none()
+                                && previous_cache.session_id.is_none());
+                        if can_preserve_ttl {
+                            if cache.ttl_seconds.is_none() {
+                                cache.ttl_seconds = previous_cache.ttl_seconds;
+                            }
+                            if cache.last_activity_unix.is_none() {
+                                cache.last_activity_unix = previous_cache.last_activity_unix;
+                            }
                         }
                     }
                 }
@@ -282,6 +352,16 @@ impl CacheStore {
     }
 }
 
+fn strip_session_cache_state(cache: &mut crate::model::CacheUsage, clear_ttl: bool) {
+    cache.session_totals = None;
+    cache.session_id = None;
+    cache.transcript_offset = 0;
+    if clear_ttl {
+        cache.ttl_seconds = None;
+        cache.last_activity_unix = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +407,66 @@ mod tests {
             .unwrap();
         assert_eq!(saved_context.used_percent, 24.0);
         assert_eq!(saved_context.cache, context.cache);
+    }
+
+    #[test]
+    fn statusline_refresh_preserves_session_totals_only_for_the_same_session() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let previous_cache = CacheUsage::from_token_counts(10, 90, 0)
+            .unwrap()
+            .with_ttl_estimate(300, 1_000)
+            .with_session_totals(
+                crate::model::CacheTotals::from_token_counts(10, 90, 0),
+                "session-1",
+                512,
+            );
+        cache
+            .save(
+                &snapshot().with_context(Some(
+                    ContextUsage::new(23.5)
+                        .unwrap()
+                        .with_cache(Some(previous_cache.clone())),
+                )),
+            )
+            .unwrap();
+
+        let same_session = snapshot().with_context(Some(
+            ContextUsage::new(24.0).unwrap().with_cache(Some(
+                CacheUsage::from_token_counts(1, 2, 3)
+                    .unwrap()
+                    .with_session_totals(None, "session-1", 0),
+            )),
+        ));
+        cache
+            .save_preserving_context_for_session(same_session, Some("session-1"))
+            .unwrap();
+        let saved = cache.load(Provider::Grok).unwrap().unwrap();
+        let saved_cache = saved.context.unwrap().cache.unwrap();
+        assert_eq!(saved_cache.session_totals, previous_cache.session_totals);
+        assert_eq!(saved_cache.transcript_offset, 512);
+        assert_eq!(saved_cache.ttl_seconds, Some(300));
+
+        let new_session = snapshot().with_context(Some(
+            ContextUsage::new(25.0).unwrap().with_cache(Some(
+                CacheUsage::from_token_counts(1, 2, 3)
+                    .unwrap()
+                    .with_session_totals(None, "session-2", 0),
+            )),
+        ));
+        cache
+            .save_preserving_context_for_session(new_session, Some("session-2"))
+            .unwrap();
+        let saved_cache = cache
+            .load(Provider::Grok)
+            .unwrap()
+            .unwrap()
+            .context
+            .unwrap()
+            .cache
+            .unwrap();
+        assert!(saved_cache.session_totals.is_none());
+        assert!(saved_cache.ttl_seconds.is_none());
     }
 
     #[test]

@@ -211,6 +211,67 @@ pub struct CacheUsage {
     pub ttl_seconds: Option<u64>,
     #[serde(default)]
     pub last_activity_unix: Option<u64>,
+    /// Cumulative cache counters for the current provider session.
+    ///
+    /// `current_usage` is a latest-request view for Claude/Agy, so the
+    /// sidebar uses this optional aggregate when a local transcript gives us
+    /// a trustworthy session boundary and offset.
+    #[serde(default)]
+    pub session_totals: Option<CacheTotals>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub transcript_offset: u64,
+}
+
+/// Cache counters accumulated across all completed requests in one session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CacheTotals {
+    pub fresh_input_tokens: u64,
+    pub read_tokens: u64,
+    pub creation_tokens: u64,
+    pub hit_percent: f64,
+}
+
+impl CacheTotals {
+    pub fn from_token_counts(
+        fresh_input_tokens: u64,
+        read_tokens: u64,
+        creation_tokens: u64,
+    ) -> Option<Self> {
+        let total = fresh_input_tokens
+            .saturating_add(read_tokens)
+            .saturating_add(creation_tokens);
+        if total == 0 {
+            return None;
+        }
+        Some(Self {
+            fresh_input_tokens,
+            read_tokens,
+            creation_tokens,
+            hit_percent: read_tokens as f64 / total as f64 * 100.0,
+        })
+    }
+
+    pub fn add_token_counts(
+        &mut self,
+        fresh_input_tokens: u64,
+        read_tokens: u64,
+        creation_tokens: u64,
+    ) {
+        self.fresh_input_tokens = self.fresh_input_tokens.saturating_add(fresh_input_tokens);
+        self.read_tokens = self.read_tokens.saturating_add(read_tokens);
+        self.creation_tokens = self.creation_tokens.saturating_add(creation_tokens);
+        let total = self
+            .fresh_input_tokens
+            .saturating_add(self.read_tokens)
+            .saturating_add(self.creation_tokens);
+        self.hit_percent = if total == 0 {
+            0.0
+        } else {
+            self.read_tokens as f64 / total as f64 * 100.0
+        };
+    }
 }
 
 impl CacheUsage {
@@ -232,6 +293,9 @@ impl CacheUsage {
             hit_percent: read_tokens as f64 / total as f64 * 100.0,
             ttl_seconds: None,
             last_activity_unix: None,
+            session_totals: None,
+            session_id: None,
+            transcript_offset: 0,
         })
     }
 
@@ -245,6 +309,18 @@ impl CacheUsage {
         let ttl = self.ttl_seconds?;
         let last_activity = self.last_activity_unix?;
         Some(last_activity.saturating_add(ttl).saturating_sub(now_unix))
+    }
+
+    pub fn with_session_totals(
+        mut self,
+        totals: Option<CacheTotals>,
+        session_id: impl Into<String>,
+        transcript_offset: u64,
+    ) -> Self {
+        self.session_totals = totals;
+        self.session_id = Some(session_id.into());
+        self.transcript_offset = transcript_offset;
+        self
     }
 }
 
@@ -381,6 +457,16 @@ mod tests {
                 .hit_percent,
             0.0
         );
+    }
+
+    #[test]
+    fn session_cache_totals_accumulate_and_recompute_hit_ratio() {
+        let mut totals = CacheTotals::from_token_counts(100, 800, 100).unwrap();
+        totals.add_token_counts(100, 0, 0);
+        assert_eq!(totals.fresh_input_tokens, 200);
+        assert_eq!(totals.read_tokens, 800);
+        assert_eq!(totals.creation_tokens, 100);
+        assert_eq!(totals.hit_percent, 72.72727272727273);
     }
 
     #[test]

@@ -14,6 +14,8 @@ pub struct MetadataTokens {
     pub quota_week_severity: Option<Severity>,
     pub quota_summary: String,
     pub quota_context: String,
+    pub quota_cache: String,
+    pub quota_cache_ttl: String,
     pub quota_error: Option<String>,
 }
 
@@ -29,7 +31,9 @@ impl MetadataTokens {
             quota_week: sidebar_window(snapshot, WindowKind::Weekly, now_unix),
             quota_week_severity: window_severity(snapshot, WindowKind::Weekly, now_unix),
             quota_summary: sidebar_summary(snapshot, now_unix),
-            quota_context: sidebar_context(snapshot, now_unix),
+            quota_context: sidebar_context(snapshot),
+            quota_cache: sidebar_cache(snapshot),
+            quota_cache_ttl: sidebar_cache_ttl(snapshot, now_unix),
             quota_error: None,
         }
     }
@@ -52,6 +56,8 @@ impl MetadataTokens {
             quota_week_severity: Some(Severity::Unknown),
             quota_summary: "unavailable".to_string(),
             quota_context: String::new(),
+            quota_cache: String::new(),
+            quota_cache_ttl: String::new(),
             quota_error: Some(reason.into().chars().take(80).collect()),
         }
     }
@@ -91,18 +97,43 @@ fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind, now_unix: u64) 
         .unwrap_or_default()
 }
 
-fn sidebar_context(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
+fn sidebar_context(snapshot: &ProviderSnapshot) -> String {
     let Some(context) = snapshot.context.as_ref() else {
         return String::new();
     };
-    let mut parts = vec![format!("context {}%", format_percent(context.used_percent))];
-    if let Some(cache) = context.cache.as_ref() {
-        parts.push(format!("cache {}%", format_percent(cache.hit_percent)));
-        if let Some(seconds) = cache.remaining_ttl_seconds(now_unix) {
-            parts.push(format!("ttl≈{}", format_ttl(seconds)));
-        }
+    format!("context {}%", format_percent(context.used_percent))
+}
+
+fn sidebar_cache(snapshot: &ProviderSnapshot) -> String {
+    let Some(totals) = snapshot
+        .context
+        .as_ref()
+        .and_then(|context| context.cache.as_ref())
+        .and_then(|cache| cache.session_totals.as_ref())
+    else {
+        return String::new();
+    };
+    format!("cache {:.1}% hit", totals.hit_percent)
+}
+
+fn sidebar_cache_ttl(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
+    let Some(cache) = snapshot
+        .context
+        .as_ref()
+        .and_then(|context| context.cache.as_ref())
+    else {
+        return String::new();
+    };
+    let Some(last_activity) = cache.last_activity_unix else {
+        return String::new();
+    };
+    let elapsed = now_unix.saturating_sub(last_activity);
+    let mut value = format!("cache last {} ago", format_elapsed(elapsed));
+    if let Some(remaining) = cache.remaining_ttl_seconds(now_unix) {
+        value.push_str(" · ttl≈");
+        value.push_str(&format_ttl(remaining));
     }
-    parts.join(" · ")
+    value
 }
 
 fn format_window(window: &UsageWindow, now_unix: u64, include_left: bool) -> String {
@@ -142,6 +173,13 @@ fn format_ttl(seconds: u64) -> String {
     let minutes = seconds / 60;
     if (60..24 * 60).contains(&minutes) && minutes.is_multiple_of(60) {
         return format!("{}h", minutes / 60);
+    }
+    format_duration(seconds)
+}
+
+fn format_elapsed(seconds: u64) -> String {
+    if seconds < 60 {
+        return "<1m".to_string();
     }
     format_duration(seconds)
 }
@@ -236,10 +274,15 @@ mod tests {
     }
 
     #[test]
-    fn metadata_formats_cache_hit_rate_and_approximate_ttl() {
+    fn metadata_formats_session_cache_hit_rate_and_approximate_ttl() {
         let cache = crate::model::CacheUsage::from_token_counts(100, 800, 100)
             .unwrap()
-            .with_ttl_estimate(60 * 60, 0);
+            .with_ttl_estimate(60 * 60, 0)
+            .with_session_totals(
+                crate::model::CacheTotals::from_token_counts(100, 800, 100),
+                "session-1",
+                1,
+            );
         let context = crate::model::ContextUsage::new(23.5)
             .unwrap()
             .with_cache(Some(cache));
@@ -250,6 +293,26 @@ mod tests {
         )
         .with_context(Some(context));
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
-        assert_eq!(values.quota_context, "context 24% · cache 80% · ttl≈1h");
+        assert_eq!(values.quota_context, "context 24%");
+        assert_eq!(values.quota_cache, "cache 80.0% hit");
+        assert_eq!(values.quota_cache_ttl, "cache last <1m ago · ttl≈1h");
+    }
+
+    #[test]
+    fn session_cache_percentage_keeps_one_decimal_instead_of_rounding_to_100() {
+        let cache = crate::model::CacheUsage::from_token_counts(2_000, 433_336, 1_655)
+            .unwrap()
+            .with_session_totals(
+                crate::model::CacheTotals::from_token_counts(2_000, 433_336, 1_655),
+                "session-1",
+                1,
+            );
+        let snapshot = ProviderSnapshot::new(Provider::Claude, vec![], 0).with_context(Some(
+            crate::model::ContextUsage::new(43.0)
+                .unwrap()
+                .with_cache(Some(cache)),
+        ));
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_cache, "cache 99.2% hit");
     }
 }
