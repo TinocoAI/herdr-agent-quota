@@ -1,11 +1,23 @@
 use crate::cache::CacheStore;
-use crate::herdr::{current_agent_provider, list_agent_panes, publish_tokens, refresh_pane_topic};
+use crate::herdr::{
+    current_agent_provider, list_agent_panes, list_agent_state, publish_tokens, refresh_pane_topic,
+    AgentPane,
+};
 use crate::model::Provider;
 use crate::presentation::MetadataTokens;
 use crate::providers::{codex, grok};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+const MAX_ACTIVE_TURN_WATCH: Duration = Duration::from_secs(60 * 60);
+const TURN_WATCH_LOCK: &str = "turn.lock";
 
 #[derive(Debug, Serialize)]
 pub struct ProviderOutcome {
@@ -19,6 +31,82 @@ pub fn run(providers: &[Provider], force: bool, json: bool) -> Result<()> {
     run_internal(providers, force, json, None)
 }
 
+/// Refresh selected providers until their agents leave the working state.
+///
+/// This command is normally launched detached by `event` and is deliberately
+/// quota-only: it never reads a pane. Claude/Agy statusLine hooks keep writing
+/// snapshots to the same cache, while Codex/Grok use their normal providers'
+/// fetchers. One global watcher reads Herdr's agent inventory once per poll
+/// and refreshes every selected provider that is working. The existing
+/// provider-level debounce remains the lower bound for network requests.
+pub fn watch(providers: &[Provider], interval_seconds: Option<u64>) -> Result<()> {
+    let cache = CacheStore::from_env()?;
+    let interval_seconds = interval_seconds
+        .map(CacheStore::validate_watch_interval_seconds)
+        .transpose()?
+        .unwrap_or_else(|| cache.watch_interval_seconds());
+    let Some(_lock) = cache.try_lock_named(TURN_WATCH_LOCK)? else {
+        return Ok(());
+    };
+
+    let started = Instant::now();
+    let started_millis = CacheStore::now_millis();
+    let interval = Duration::from_secs(interval_seconds);
+    let mut previous_active = Vec::new();
+    loop {
+        if cache.turn_watchers_stopped_after(started_millis)? {
+            break;
+        }
+        // A transient Herdr failure should not terminate a live watcher; the
+        // one-hour cap below still prevents an orphaned process. The next
+        // poll retries the single inventory call.
+        let Ok(state) = list_agent_state() else {
+            if started.elapsed() >= MAX_ACTIVE_TURN_WATCH {
+                break;
+            }
+            thread::sleep(interval);
+            continue;
+        };
+        let active = providers
+            .iter()
+            .copied()
+            .filter(|provider| state.working_providers.contains(provider))
+            .collect::<Vec<_>>();
+        let finishing = previous_active
+            .iter()
+            .copied()
+            .filter(|provider| !active.contains(provider))
+            .collect::<Vec<_>>();
+
+        // A provider can settle while another provider keeps working. Run one
+        // final debounced pass for providers that just transitioned to idle,
+        // then continue polling the remaining active set in the same process.
+        if !finishing.is_empty() {
+            let _ = refresh_and_publish(&cache, &finishing, false, &state.panes);
+        }
+        if active.is_empty() {
+            break;
+        }
+        let _ = refresh_and_publish(&cache, &active, false, &state.panes);
+        previous_active = active;
+        if started.elapsed() >= MAX_ACTIVE_TURN_WATCH {
+            break;
+        }
+        thread::sleep(interval);
+    }
+    Ok(())
+}
+
+fn refresh_and_publish(
+    cache: &CacheStore,
+    providers: &[Provider],
+    force: bool,
+    panes: &[AgentPane],
+) -> Result<()> {
+    cache.with_lock(|| refresh_locked(cache, providers, force))?;
+    publish(cache, providers, None, Some(panes))
+}
+
 fn run_internal(
     providers: &[Provider],
     force: bool,
@@ -27,7 +115,7 @@ fn run_internal(
 ) -> Result<()> {
     let cache = CacheStore::from_env()?;
     let outcomes = cache.with_lock(|| refresh_locked(&cache, providers, force))?;
-    publish(&cache, providers, topic_pane)?;
+    publish(&cache, providers, topic_pane, None)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&outcomes)?);
     }
@@ -43,7 +131,19 @@ pub fn event() -> Result<()> {
         .map(|provider| vec![provider])
         .unwrap_or_else(|| Provider::ALL.to_vec());
     let topic_pane = event.as_ref().and_then(find_pane_id);
-    run_internal(&providers, false, false, topic_pane)
+    let status = event.as_ref().and_then(find_status);
+    // The detached watcher owns the final debounced pass. Keeping the event
+    // itself debounced avoids a duplicate Codex/Grok fetch when the agent
+    // emits its idle transition immediately after a tool hook.
+    let result = run_internal(&providers, false, false, topic_pane);
+    if status.is_some_and(is_working_status) {
+        if let Err(error) = spawn_watch() {
+            if result.is_ok() {
+                return Err(error);
+            }
+        }
+    }
+    result
 }
 
 pub fn focus() -> Result<()> {
@@ -110,8 +210,16 @@ fn refresh_locked(
     Ok(outcomes)
 }
 
-fn publish(cache: &CacheStore, providers: &[Provider], topic_pane: Option<&str>) -> Result<()> {
-    let mut panes = list_agent_panes().unwrap_or_default();
+fn publish(
+    cache: &CacheStore,
+    providers: &[Provider],
+    topic_pane: Option<&str>,
+    agent_panes: Option<&[AgentPane]>,
+) -> Result<()> {
+    let mut panes = agent_panes.map_or_else(
+        || list_agent_panes().unwrap_or_default(),
+        |panes| panes.to_vec(),
+    );
     if let Some(pane) = topic_pane.and_then(|pane_id| {
         panes
             .iter_mut()
@@ -133,6 +241,37 @@ fn publish(cache: &CacheStore, providers: &[Provider], topic_pane: Option<&str>)
 fn event_json() -> Option<Value> {
     let input = std::env::var("HERDR_PLUGIN_EVENT_JSON").ok()?;
     serde_json::from_str(&input).ok()
+}
+
+fn find_status(value: &Value) -> Option<&str> {
+    find_field(value, &["agent_status", "agentStatus", "status", "state"])
+}
+
+fn is_working_status(status: &str) -> bool {
+    status.eq_ignore_ascii_case("working")
+}
+
+fn spawn_watch() -> Result<()> {
+    let executable = std::env::current_exe().context("resolve plugin executable")?;
+    let mut command = Command::new(executable);
+    command
+        .args(["watch", "--provider", "all"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    unsafe {
+        // A Herdr event process is short-lived. Put the watcher in its own
+        // process group so it survives the hook supervisor cleanly.
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.spawn().context("start active-turn quota watcher")?;
+    Ok(())
 }
 
 // Event payloads are nested and their shape differs per event, so look the
@@ -207,5 +346,15 @@ mod tests {
         let value: Value =
             serde_json::from_str(r#"{"event":"x","data":{"agent":"claude"}}"#).unwrap();
         assert_eq!(find_pane_id(&value), None);
+    }
+
+    #[test]
+    fn status_events_start_pulses_only_for_working_turns() {
+        let working: Value =
+            serde_json::from_str(r#"{"data":{"agent":"codex","agent_status":"working"}}"#).unwrap();
+        let idle: Value =
+            serde_json::from_str(r#"{"data":{"agent":"codex","status":"idle"}}"#).unwrap();
+        assert!(find_status(&working).is_some_and(is_working_status));
+        assert_eq!(find_status(&idle), Some("idle"));
     }
 }
