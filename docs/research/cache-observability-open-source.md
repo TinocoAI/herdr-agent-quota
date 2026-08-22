@@ -116,8 +116,8 @@ Antigravity CLI v1.1.7 起在 `json`/`stream-json` usage 中增加 `cache_read_t
 ### 有界 TTL 诊断层
 
 本项目采用 ilia 项目的 bucket/timestamp 口径：session 首次建立累计时读取 transcript，之后每次只读新增字节；TTL token 显示
-`ttl≈54m` 这类带剩余时间的本地估算（5m/1h bucket），不显示“expires in”或最近发送时间。任何解析失败、compact、字段缺失
-都不生成新估算；跨 session 不继承旧 TTL，避免误报。该扫描发生在已有 statusLine hook 内，不是全局 watcher，也不读取 pane。
+`ttl≈54m` 这类带剩余时间的本地估算（5m/1h bucket），不显示“expires in”或最近发送时间；归零后改显示红色 `no cached`。
+任何解析失败、compact、字段缺失都不生成新估算；跨 session 不继承旧 TTL，避免误报。该扫描发生在已有 statusLine hook 内，不是全局 watcher，也不读取 pane。
 
 ### 明确不做
 

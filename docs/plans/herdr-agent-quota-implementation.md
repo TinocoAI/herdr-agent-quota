@@ -108,6 +108,8 @@ longer sent as a separate metadata value:
   transcript when a session boundary is available.
 - `$quota_cache_ttl`: the remaining approximate provider TTL when supported;
   it shares the sidebar row with `$quota_cache`.
+- `$quota_error`: short red diagnostics such as `no cached` when an estimated
+  cache TTL has expired.
 - `$quota_5h`: compact five-hour remaining value and reset ETA when exposed.
 - `$quota_week`: compact weekly remaining value and reset ETA.
 - `$quota_summary`: window-driven compact remaining values and reset ETAs.

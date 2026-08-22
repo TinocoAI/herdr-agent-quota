@@ -49,6 +49,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plugin-owned copies are removed during configure because the single global
   watcher now covers active and settled turns without spawning one command per
   tool call.
+- Expired cache TTL estimates now render as a red `no cached` diagnostic, and
+  Claude payloads without quota fields clear stale window values instead of
+  leaving an old weekly reset on the sidebar.
+- Weekly-only providers now use the readable `week ... reset ...` label; the
+  compact `5h`/`7d` form remains for providers that expose both windows.
 
 - Agent topics now come only from the latest user prompt in pane output. Native
   `Thinking`/`Executing` titles and other AI status text are no longer published

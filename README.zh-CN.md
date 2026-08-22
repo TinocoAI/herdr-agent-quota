@@ -201,6 +201,7 @@ rows = [
   [
     { token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false },
     { token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false },
+    { token = "$quota_error", fg = "#ca6470", bold = true, dim = false },
   ],
   [
     { token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false },
@@ -223,8 +224,8 @@ rows = [
 - `$quota_context` 显示 provider 报告的 context **已用**百分比，并紧跟在 provider
   名称后面。`$quota_cache` 是主 session transcript 的累计命中率，不是每一轮的比例；
   固定保留一位小数，避免 `99.6%` 被显示成 `100%`。`$quota_cache_ttl` 是 Claude
-  提供 5m/1h 缓存桶时的剩余近似 TTL。两个 cache 值共用一行；字段缺失时隐藏，
-  不做猜测。
+  提供 5m/1h 缓存桶时的剩余近似 TTL；TTL 归零时用红色 `$quota_error` 显示
+  `no cached`。两个 cache 值共用一行；字段缺失时隐藏，不做猜测。
 - context 行使用紫色强调色（`#9b8fd8`），与额度续航的绿/琥珀/红色区分开。
 - 每个窗口只发布一个样式 token。Herdr 会把同一行相邻 token 自动用 `·`
   分隔，并在 token 缺失时移除对应分隔符，所以 5h/7d 会紧凑地显示在一行，

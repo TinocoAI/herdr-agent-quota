@@ -34,7 +34,7 @@ impl MetadataTokens {
             quota_context: sidebar_context(snapshot),
             quota_cache: sidebar_cache(snapshot),
             quota_cache_ttl: sidebar_cache_ttl(snapshot, now_unix),
-            quota_error: None,
+            quota_error: sidebar_cache_error(snapshot, now_unix),
         }
     }
 
@@ -93,7 +93,13 @@ fn summary(snapshot: &ProviderSnapshot, now_unix: u64, include_left: bool) -> St
 fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind, now_unix: u64) -> String {
     snapshot
         .window(kind)
-        .map(|window| format_compact_window(window, now_unix))
+        .map(|window| {
+            if kind == WindowKind::Weekly && snapshot.window(WindowKind::FiveHour).is_none() {
+                format_window(window, now_unix, false)
+            } else {
+                format_compact_window(window, now_unix)
+            }
+        })
         .unwrap_or_default()
 }
 
@@ -126,8 +132,19 @@ fn sidebar_cache_ttl(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
     };
     cache
         .remaining_ttl_seconds(now_unix)
+        .filter(|remaining| *remaining > 0)
         .map(|remaining| format!("ttl≈{}", format_ttl(remaining)))
         .unwrap_or_default()
+}
+
+fn sidebar_cache_error(snapshot: &ProviderSnapshot, now_unix: u64) -> Option<String> {
+    snapshot
+        .context
+        .as_ref()
+        .and_then(|context| context.cache.as_ref())
+        .and_then(|cache| cache.remaining_ttl_seconds(now_unix))
+        .filter(|remaining| *remaining == 0)
+        .map(|_| "no cached".to_string())
 }
 
 fn format_window(window: &UsageWindow, now_unix: u64, include_left: bool) -> String {
@@ -310,6 +327,38 @@ mod tests {
         assert_eq!(values.quota_context, "context 24%");
         assert_eq!(values.quota_cache, "cache 80.0%");
         assert_eq!(values.quota_cache_ttl, "ttl≈1h");
+        assert_eq!(values.quota_error, None);
+    }
+
+    #[test]
+    fn expired_cache_ttl_is_reported_as_no_cached() {
+        let cache = crate::model::CacheUsage::from_token_counts(100, 800, 100)
+            .unwrap()
+            .with_ttl_estimate(60, 0)
+            .with_session_totals(
+                crate::model::CacheTotals::from_token_counts(100, 800, 100),
+                "session-1",
+                1,
+            );
+        let snapshot = ProviderSnapshot::new(Provider::Claude, vec![], 0).with_context(Some(
+            crate::model::ContextUsage::new(23.5)
+                .unwrap()
+                .with_cache(Some(cache)),
+        ));
+        let values = MetadataTokens::from_snapshot(&snapshot, 61);
+        assert_eq!(values.quota_cache_ttl, "");
+        assert_eq!(values.quota_error.as_deref(), Some("no cached"));
+    }
+
+    #[test]
+    fn weekly_only_sidebar_window_keeps_the_readable_reset_label() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Codex,
+            vec![window(WindowKind::Weekly, 31.0, 518_400)],
+            0,
+        );
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_week, "week 69% reset 6d0h");
     }
 
     #[test]

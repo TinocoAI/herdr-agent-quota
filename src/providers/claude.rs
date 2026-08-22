@@ -8,9 +8,17 @@ pub fn parse_statusline(
     value: &Value,
     fetched_at_unix: u64,
 ) -> std::result::Result<ProviderSnapshot, ProviderError> {
-    let limits = value
-        .get("rate_limits")
-        .ok_or_else(|| ProviderError::UnsupportedResponse("missing rate_limits".to_string()))?;
+    let context = parse_context(
+        value
+            .get("context_window")
+            .or_else(|| value.get("contextWindow")),
+    )
+    .unwrap_or(None);
+    let Some(limits) = value.get("rate_limits") else {
+        return Ok(
+            ProviderSnapshot::new(Provider::Claude, vec![], fetched_at_unix).with_context(context),
+        );
+    };
     let mut windows = Vec::new();
     if let Some(window) = parse_window(limits.get("five_hour"), WindowKind::FiveHour)? {
         windows.push(window);
@@ -19,20 +27,11 @@ pub fn parse_statusline(
         windows.push(window);
     }
     if windows.is_empty() {
-        return Err(ProviderError::UnsupportedResponse(
-            "rate_limits has no supported windows".to_string(),
-        ));
+        return Ok(
+            ProviderSnapshot::new(Provider::Claude, vec![], fetched_at_unix).with_context(context),
+        );
     }
-    Ok(
-        ProviderSnapshot::new(Provider::Claude, windows, fetched_at_unix).with_context(
-            parse_context(
-                value
-                    .get("context_window")
-                    .or_else(|| value.get("contextWindow")),
-            )
-            .unwrap_or(None),
-        ),
-    )
+    Ok(ProviderSnapshot::new(Provider::Claude, windows, fetched_at_unix).with_context(context))
 }
 
 fn parse_window(
@@ -167,11 +166,25 @@ mod tests {
     #[test]
     fn allows_a_missing_claude_window() {
         let value = json!({"rate_limits": {"five_hour": null}});
-        assert!(parse_statusline(&value, 1).is_err());
+        assert!(parse_statusline(&value, 1).unwrap().windows.is_empty());
         let value = json!({
             "rate_limits": {"seven_day": {"used_percentage": 25.0}}
         });
         assert_eq!(parse_statusline(&value, 1).unwrap().windows.len(), 1);
+    }
+
+    #[test]
+    fn accepts_a_payload_without_rate_limits_to_clear_a_stale_quota() {
+        let value = json!({"context_window": {"used_percentage": 43.0}});
+        let snapshot = parse_statusline(&value, 1).unwrap();
+        assert!(snapshot.windows.is_empty());
+        assert_eq!(
+            snapshot
+                .context
+                .as_ref()
+                .map(|context| context.used_percent),
+            Some(43.0)
+        );
     }
 
     #[test]
