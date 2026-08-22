@@ -16,6 +16,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   requests.
 - Quota rows now show compact `5h`/`7d` window labels with minutes below one
   hour, hours and minutes below one day, and days plus hours for longer windows.
+- Cache hit rate and remaining cache TTL now share one short, color-separated
+  sidebar row; the verbose last-activity text is no longer shown.
 - Claude's plugin-owned statusLine now receives the configured global watcher
   interval as its native `refreshInterval`, keeping idle-session reset times
   fresh without an API call or model request; existing user-owned intervals are
@@ -100,8 +102,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - The context row now uses a dedicated violet accent immediately after the
-  provider name. Cache hit and last-activity/TTL rows use separate teal and
-  amber accents, while metadata publication remains capped at sixteen tokens.
+  provider name. Cache hit rate and remaining TTL share one row with separate
+  teal and amber accents, while metadata publication remains capped at sixteen
+  tokens.
 - Quota formatting is centralized in one presentation module shared by the
   sidebar, dashboard, and statusLine fallbacks. Codex remains weekly-only.
 - Five-hour and weekly quota windows now share one compact sidebar row. Herdr

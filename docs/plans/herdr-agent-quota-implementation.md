@@ -106,8 +106,8 @@ longer sent as a separate metadata value:
 - `$quota_context`: provider-reported context-used percentage when available.
 - `$quota_cache`: one-decimal cumulative cache hit rate for the main session
   transcript when a session boundary is available.
-- `$quota_cache_ttl`: elapsed time since the latest cache-bearing response and
-  an explicitly approximate provider TTL estimate when supported.
+- `$quota_cache_ttl`: the remaining approximate provider TTL when supported;
+  it shares the sidebar row with `$quota_cache`.
 - `$quota_5h`: compact five-hour remaining value and reset ETA when exposed.
 - `$quota_week`: compact weekly remaining value and reset ETA.
 - `$quota_summary`: window-driven compact remaining values and reset ETAs.

@@ -113,7 +113,7 @@ fn sidebar_cache(snapshot: &ProviderSnapshot) -> String {
     else {
         return String::new();
     };
-    format!("cache {:.1}% hit", totals.hit_percent)
+    format!("cache {:.1}%", totals.hit_percent)
 }
 
 fn sidebar_cache_ttl(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
@@ -124,16 +124,10 @@ fn sidebar_cache_ttl(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
     else {
         return String::new();
     };
-    let Some(last_activity) = cache.last_activity_unix else {
-        return String::new();
-    };
-    let elapsed = now_unix.saturating_sub(last_activity);
-    let mut value = format!("cache last {} ago", format_elapsed(elapsed));
-    if let Some(remaining) = cache.remaining_ttl_seconds(now_unix) {
-        value.push_str(" · ttl≈");
-        value.push_str(&format_ttl(remaining));
-    }
-    value
+    cache
+        .remaining_ttl_seconds(now_unix)
+        .map(|remaining| format!("ttl≈{}", format_ttl(remaining)))
+        .unwrap_or_default()
 }
 
 fn format_window(window: &UsageWindow, now_unix: u64, include_left: bool) -> String {
@@ -185,13 +179,6 @@ fn format_ttl(seconds: u64) -> String {
     let minutes = seconds / 60;
     if (60..24 * 60).contains(&minutes) && minutes.is_multiple_of(60) {
         return format!("{}h", minutes / 60);
-    }
-    format_duration(seconds)
-}
-
-fn format_elapsed(seconds: u64) -> String {
-    if seconds < 60 {
-        return "<1m".to_string();
     }
     format_duration(seconds)
 }
@@ -321,8 +308,8 @@ mod tests {
         .with_context(Some(context));
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
         assert_eq!(values.quota_context, "context 24%");
-        assert_eq!(values.quota_cache, "cache 80.0% hit");
-        assert_eq!(values.quota_cache_ttl, "cache last <1m ago · ttl≈1h");
+        assert_eq!(values.quota_cache, "cache 80.0%");
+        assert_eq!(values.quota_cache_ttl, "ttl≈1h");
     }
 
     #[test]
@@ -340,6 +327,6 @@ mod tests {
                 .with_cache(Some(cache)),
         ));
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
-        assert_eq!(values.quota_cache, "cache 99.2% hit");
+        assert_eq!(values.quota_cache, "cache 99.2%");
     }
 }

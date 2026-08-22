@@ -15,8 +15,7 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 ● Owner · Claude
   hi                     ← 这个 pane 当前在做什么
   context 23%             ← provider 原生 context 百分比
-  cache 99.6% hit         ← 整个 session 累计命中率
-  cache last 2m ago · ttl≈58m
+  cache 99.6% · ttl≈58m    ← session 命中率 · 剩余缓存时间
   5h 100% 3h07m · 7d 31% 2d3h
 ```
 
@@ -158,11 +157,10 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会
 侧栏显示的是**额度剩余百分比**和距离下次额度重置的时间，不是额度 token 数量。
 Claude 的两个窗口会用紧凑的 `5h` 和 `7d` 标签放在同一行，但仍各自保留动态健康色。
 Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context **已用**百分比。
-如果有 statusLine transcript 和 session id，`cache N.N% hit` 是主 session 的累计命中率
-（`read / (fresh + creation + read)`），不是最新一轮；下一行显示最近一次有缓存响应
-距离现在多久。Claude 如果还有明确的 5 分钟/1 小时缓存桶，会显示 `ttl≈...`，这是本地
-近似，不是服务端确认的过期时间。首次 session 更新会读取一次已有 transcript，之后只读
-新增字节。Codex 会显示本地 state database 里的短会话预览；
+如果有 statusLine transcript 和 session id，`cache N.N%` 是主 session 的累计命中率
+（`read / (fresh + creation + read)`），不是最新一轮；同一行在 Claude 有明确的
+5 分钟/1 小时缓存桶时显示剩余 `ttl≈...`，这是本地近似，不是服务端确认的过期时间。
+首次 session 更新会读取一次已有 transcript，之后只读新增字节。Codex 会显示本地 state database 里的短会话预览；
 当前安全的 app-server 连接只查额度，没有绑定活动 thread，因此不猜测 Codex context
 或缓存字段。Grok 当前的 billing 来源没有 context 或缓存字段。没有证据的字段会隐藏，
 不会伪造 `cached expires`：
@@ -171,8 +169,7 @@ Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context
 ● Owner · Claude
   hi
   context 23%
-  cache 99.6% hit
-  cache last 2m ago · ttl≈58m
+  cache 99.6% · ttl≈58m
   5h 100% 3h07m · 7d 31% 2d3h
 ```
 
@@ -201,8 +198,10 @@ row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }, { token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
-  [{ token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false }],
-  [{ token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false }],
+  [
+    { token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false },
+    { token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false },
+  ],
   [
     { token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false },
     { token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false },
@@ -223,9 +222,9 @@ rows = [
   其他 provider 仍保持空白。
 - `$quota_context` 显示 provider 报告的 context **已用**百分比，并紧跟在 provider
   名称后面。`$quota_cache` 是主 session transcript 的累计命中率，不是每一轮的比例；
-  固定保留一位小数，避免 `99.6%` 被显示成 `100%`。`$quota_cache_ttl` 显示最近一次
-  有缓存响应距离现在多久；Claude 提供 5m/1h 缓存桶时还会显示剩余的 `ttl≈...`。
-  字段缺失时隐藏，不做猜测。
+  固定保留一位小数，避免 `99.6%` 被显示成 `100%`。`$quota_cache_ttl` 是 Claude
+  提供 5m/1h 缓存桶时的剩余近似 TTL。两个 cache 值共用一行；字段缺失时隐藏，
+  不做猜测。
 - context 行使用紫色强调色（`#9b8fd8`），与额度续航的绿/琥珀/红色区分开。
 - 每个窗口只发布一个样式 token。Herdr 会把同一行相邻 token 自动用 `·`
   分隔，并在 token 缺失时移除对应分隔符，所以 5h/7d 会紧凑地显示在一行，

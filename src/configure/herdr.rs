@@ -520,21 +520,21 @@ fn append_quota_rows(rows: &mut Array) {
         Some(false),
     )));
 
-    rows.push(Value::Array(styled_row(
-        "$quota_cache",
-        Some(CACHE_COLOR),
-        Some(true),
-        Some(false),
-    )));
-
-    rows.push(Value::Array(styled_row(
-        "$quota_cache_ttl",
-        Some(CACHE_TTL_COLOR),
-        Some(true),
-        Some(false),
-    )));
+    append_cache_row(rows);
 
     append_window_row(rows);
+}
+
+fn append_cache_row(rows: &mut Array) {
+    rows.push(Value::Array(Array::from_iter([
+        styled_token("$quota_cache", Some(CACHE_COLOR), Some(true), Some(false)),
+        styled_token(
+            "$quota_cache_ttl",
+            Some(CACHE_TTL_COLOR),
+            Some(true),
+            Some(false),
+        ),
+    ])));
 }
 
 fn append_window_row(rows: &mut Array) {
@@ -624,6 +624,25 @@ rows = [["state_icon", "agent"]]
                 && items
                     .iter()
                     .any(|item| configured_token_name(item) == Some("$quota_week_normal"))
+        }));
+    }
+
+    #[test]
+    fn puts_cache_rate_and_remaining_ttl_on_one_row() {
+        let updated =
+            add_quota_row("[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n").unwrap();
+        let document = updated.parse::<DocumentMut>().unwrap();
+        let rows = document["ui"]["sidebar"]["agents"]["rows"]
+            .as_array()
+            .unwrap();
+        assert!(rows.iter().any(|row| {
+            let items = row.as_array().unwrap();
+            items
+                .iter()
+                .any(|item| configured_token_name(item) == Some("$quota_cache"))
+                && items
+                    .iter()
+                    .any(|item| configured_token_name(item) == Some("$quota_cache_ttl"))
         }));
     }
 
