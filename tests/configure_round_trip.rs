@@ -200,6 +200,31 @@ fn claude_cache_is_published_by_refresh_event() {
 }
 
 #[test]
+fn claude_statusline_without_rate_limits_clears_stale_quota_windows() {
+    let state = tempdir().unwrap();
+    let (herdr_stub, _herdr_log) = install_herdr_stub(
+        state.path(),
+        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1"}]}}"#,
+    );
+    run_claude_collector(
+        state.path(),
+        &herdr_stub,
+        include_bytes!("fixtures/claude/statusline-both.json"),
+    );
+    run_claude_collector(
+        state.path(),
+        &herdr_stub,
+        br#"{"context_window":{"used_percentage":43.0}}"#,
+    );
+
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.path().join("claude-statusline.json")).unwrap())
+            .unwrap();
+    assert_eq!(snapshot["windows"].as_array().unwrap().len(), 0);
+    assert_eq!(snapshot["context"]["used_percent"], 43.0);
+}
+
+#[test]
 fn statusline_without_context_keeps_the_last_context_snapshot() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(
@@ -223,7 +248,7 @@ fn statusline_without_context_keeps_the_last_context_snapshot() {
     run_claude_refresh(state.path(), &herdr_stub);
     let report = fs::read_to_string(herdr_log).unwrap();
     assert!(report.contains("quota_context=context 24%"));
-    assert!(report.contains("quota_week=7d 72%"));
+    assert!(report.contains("quota_week=week 72%"));
 }
 
 #[test]

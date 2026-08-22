@@ -228,6 +228,7 @@ rows = [
   [
     { token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false },
     { token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false },
+    { token = "$quota_error", fg = "#ca6470", bold = true, dim = false },
   ],
   [
     { token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false },
@@ -253,8 +254,9 @@ rows = [
   directly after the provider name. `$quota_cache` is the cumulative hit rate
   for the main session transcript, not a per-turn value; it is shown to one
   decimal place so `99.6%` is not rounded to `100%`. `$quota_cache_ttl` is the
-  remaining approximate TTL when Claude exposes a 5m/1h bucket. Both cache
-  values share one row; missing fields are hidden instead of guessed.
+  remaining approximate TTL when Claude exposes a 5m/1h bucket; when it reaches
+  zero, the red `$quota_error` token says `no cached`. Both cache values share
+  one row; missing fields are hidden instead of guessed.
 - The context row uses a violet accent (`#9b8fd8`) so context pressure is easy
   to distinguish from the green/amber/red quota runway colors.
 - Each window publishes exactly one styled variant. Herdr renders adjacent

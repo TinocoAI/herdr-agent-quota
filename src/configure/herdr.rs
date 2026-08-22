@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 22] = [
+const QUOTA_ROW_MARKERS: [&str; 23] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
@@ -14,6 +14,7 @@ const QUOTA_ROW_MARKERS: [&str; 22] = [
     "$quota_context",
     "$quota_cache",
     "$quota_cache_ttl",
+    "$quota_error",
     "$quota_topic",
     "$quota_5h",
     "$quota_week",
@@ -534,6 +535,12 @@ fn append_cache_row(rows: &mut Array) {
             Some(true),
             Some(false),
         ),
+        styled_token(
+            "$quota_error",
+            Some(QUOTA_DANGER_COLOR),
+            Some(true),
+            Some(false),
+        ),
     ])));
 }
 
@@ -644,6 +651,23 @@ rows = [["state_icon", "agent"]]
                     .iter()
                     .any(|item| configured_token_name(item) == Some("$quota_cache_ttl"))
         }));
+    }
+
+    #[test]
+    fn gives_no_cached_a_red_token_without_spending_an_extra_metadata_slot() {
+        let updated =
+            add_quota_row("[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n").unwrap();
+        let document = updated.parse::<DocumentMut>().unwrap();
+        let rows = document["ui"]["sidebar"]["agents"]["rows"]
+            .as_array()
+            .unwrap();
+        assert!(rows.iter().any(|row| {
+            let items = row.as_array().unwrap();
+            items
+                .iter()
+                .any(|item| configured_token_name(item) == Some("$quota_error"))
+        }));
+        assert!(updated.contains("fg = \"#ca6470\""));
     }
 
     #[test]
