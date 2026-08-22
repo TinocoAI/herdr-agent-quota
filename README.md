@@ -14,7 +14,8 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 ```text
 ● Owner · Claude
   hi                     ← what that pane is actually working on
-  context 23%            ← when the CLI exposes context usage
+  context 23% · cache 96% · ttl≈58m
+                         ← cache fields appear when the CLI exposes them
   5h 100% reset 3h07m
   week 31% reset 2d3h
 ```
@@ -170,26 +171,28 @@ long turns no longer start one refresh command per tool call.
 
 | CLI | Sidebar windows | Local collection path | Extra setup |
 | --- | --- | --- | --- |
-| Claude Code `2.1.233` | `5h` + `week` + context | Official `statusLine` JSON: `rate_limits` and `context_window` | The configure action installs and chains it automatically |
+| Claude Code `2.1.233` | `5h` + `week` + context + cache hit/approx. TTL | Official `statusLine` JSON: `rate_limits`, `context_window`, and `transcript_path` | The configure action installs and chains it automatically |
 | OpenAI Codex `0.147.0` | `week` + local session summary | One-shot local `codex app-server --stdio`: quota and bounded `thread/list` | ChatGPT subscription login; API-key mode is shown as unavailable |
 | Grok CLI / Grok Build `1.0.4` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Covered by the unified watcher; no response hook is installed |
-| Agy / Antigravity CLI `1.1.13` | `5h` + `week` + context | Official `statusLine` JSON: `quota` and `context_window` | The configure action installs and chains it automatically |
+| Agy / Antigravity CLI `1.1.13` | `5h` + `week` + context + cache hit | Official `statusLine` JSON: `quota` and `context_window` | The configure action installs and chains it automatically |
 
 Versions above were checked on the development machine on 2026-08-15. The
 parser follows the provider fields rather than hard-coding these version
 strings, so newer compatible CLI releases can continue to work.
 
 The sidebar shows **percentage remaining** and the time until each quota reset,
-not quota token counts. Claude and Agy also show context percentage when their
-statusLine payload contains it. Codex shows a short session preview from its
-local state database; its live context percentage is not queried because the
-current safe app-server connection is quota-only and does not attach to an
-active thread. Grok's current billing source has neither context nor session
-data. No provider exposes a reliable cache-entry expiry timestamp, so there is
-intentionally no `cached expires` row. During a working turn, one short-lived
-global watcher polls once per configured interval, coalesces active fetches, and
-exits when all selected providers settle. The sidebar does not run a permanent
-daemon.
+not quota token counts. Claude and Agy also show provider-reported context
+percentage and, when `current_usage` contains the counters, the latest cache
+hit ratio (`read / (fresh + creation + read)`). Claude may additionally show
+`ttl≈...`: this is a local estimate from the last 16 KiB of its transcript and
+the provider's 5-minute/1-hour cache bucket, not a server-confirmed expiry.
+Codex shows a short session preview from its local state database; its live
+context and cache fields are not queried because the current safe app-server
+connection is quota-only and does not attach to an active thread. Grok's
+current billing source has neither context nor cache fields. During a working
+turn, one short-lived global watcher polls once per configured interval,
+coalesces active fetches, and exits when all selected providers settle. The
+sidebar does not run a permanent daemon.
 
 A failed refresh never replaces a successful cached value with `unavailable`;
 a provider without any successful snapshot is shown as `N/A` until its first
@@ -215,7 +218,7 @@ row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
-  [{ token = "$quota_context", bold = true, dim = false }],
+  [{ token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
   [{ token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false }],
   [{ token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false }],
   [{ token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false }],
@@ -234,9 +237,13 @@ rows = [
   then resource status.
 - For Codex, an empty/default prompt falls back to the short thread preview from
   the local app-server state database; other providers keep the prompt empty.
-- `$quota_context` is the provider-reported context **used** percentage. It is
-  currently populated by Claude and Agy statusLine payloads; missing fields are
-  hidden instead of guessed.
+- `$quota_context` starts with the provider-reported context **used** percentage.
+  Claude and Agy can append `cache N%` from the latest statusLine request; a
+  Claude transcript with an explicit cache bucket can append `ttl≈...`. Missing
+  fields are hidden instead of guessed, and the TTL marker is deliberately
+  approximate.
+- The context row uses a violet accent (`#9b8fd8`) so context pressure is easy
+  to distinguish from the green/amber/red quota runway colors.
 - Each window publishes exactly one styled variant. Color follows runway rather
   than a fixed quota threshold: remaining quota is compared with the percentage
   of window time still left. At or ahead of pace is green; behind pace is
@@ -247,7 +254,8 @@ rows = [
   `row_gap` value is preserved.
 - `$quota_5h`, `$quota_week`, and `$quota_summary` remain available for custom
   unstyled layouts. `$quota_summary` is the compact quota-window summary, not a
-  cache-expiry value.
+  cache-expiry value; `$quota_context` is the single token for context and cache
+  diagnostics so the plugin stays within Herdr's metadata-token limit.
 
 Herdr 0.8 only accepts fixed hex colors for styled tokens, not semantic theme
 colors. The default palette uses soft, high-luminance green, amber, and red
@@ -285,15 +293,17 @@ such as `Thinking` or `Executing`. It does not show the working directory.
   developer/API-team billing. The unified watcher and the existing 60-second
   debounce limit active requests; it never logs in or refreshes the key.
 - **Claude Code:** the official [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline)
-  supplies the five-hour, seven-day, and context-used percentage values. A
-  previous statusLine command is backed up, chained, and restored by the
-  uninstall action; the active-turn watcher republishes each new snapshot
-  without calling Herdr from that hook.
+  supplies the five-hour, seven-day, context-used percentage, and latest
+  cache counters. A previous statusLine command is backed up, chained, and
+  restored by the uninstall action. When a transcript path and an explicit
+  cache bucket are present, the hook reads only its final 16 KiB to produce the
+  `ttl≈...` estimate; it makes no network request and does not read the full
+  conversation.
 - **Agy/Antigravity:** the official [`/usage` and statusline docs](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
-  supply Gemini and third-party pools plus context-used percentage. When both
-  pools exist, the sidebar uses the lowest remaining percentage so the single
-  Agy row is conservative; its statusLine cache is published by the same
-  active-turn watcher.
+  supply Gemini and third-party pools plus context-used percentage and latest
+  cache counters. When both pools exist, the sidebar uses the lowest remaining
+  percentage so the single Agy row is conservative; Agy has no reliable TTL
+  field, so it shows the hit ratio only.
 
 Snapshots and refresh markers stay in Herdr's plugin state directory. No usage
 data is uploaded, browser cookies or browser keychains are read, and provider
@@ -332,6 +342,8 @@ follows and how to add a provider. Security reporting is in
 [`SECURITY.md`](SECURITY.md), and released changes are in
 [`CHANGELOG.md`](CHANGELOG.md).
 
+The cache/context field investigation and open-source comparison are documented
+in [`docs/research/cache-observability-open-source.md`](docs/research/cache-observability-open-source.md).
 The Grok source investigation is documented in
 [`docs/research/codexbar-grok-usage.md`](docs/research/codexbar-grok-usage.md),
 and the implementation contract is in

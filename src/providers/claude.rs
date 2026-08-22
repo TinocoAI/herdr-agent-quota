@@ -1,6 +1,6 @@
 use crate::cache::CacheStore;
 use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
-use crate::providers::statusline::parse_context;
+use crate::providers::statusline::{enrich_cache_ttl, parse_context};
 use crate::providers::ProviderError;
 use serde_json::Value;
 
@@ -66,7 +66,9 @@ pub fn run_statusline(input: &[u8]) -> std::result::Result<ProviderSnapshot, Pro
     let value: Value = serde_json::from_slice(input).map_err(|_| {
         ProviderError::UnsupportedResponse("statusLine input is not JSON".to_string())
     })?;
-    parse_statusline(&value, CacheStore::now_unix())
+    let mut snapshot = parse_statusline(&value, CacheStore::now_unix())?;
+    enrich_cache_ttl(&mut snapshot, &value);
+    Ok(snapshot)
 }
 
 #[cfg(test)]
@@ -94,7 +96,12 @@ mod tests {
         let value = json!({
             "context_window": {
                 "used_percentage": 23.5,
-                "remaining_percentage": 76.5
+                "remaining_percentage": 76.5,
+                "current_usage": {
+                    "input_tokens": 100,
+                    "cache_read_input_tokens": 800,
+                    "cache_creation_input_tokens": 100
+                }
             },
             "rate_limits": {
                 "five_hour": {"used_percentage": 58.0}
@@ -108,6 +115,36 @@ mod tests {
                 .map(|context| context.used_percent),
             Some(23.5)
         );
+        let cache = snapshot.context.as_ref().unwrap().cache.as_ref().unwrap();
+        assert_eq!(cache.read_tokens, 800);
+        assert_eq!(cache.creation_tokens, 100);
+        assert_eq!(cache.hit_percent, 80.0);
+    }
+
+    #[test]
+    fn estimates_claude_cache_ttl_from_a_bounded_transcript_tail() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            transcript.path(),
+            r#"{"type":"assistant","timestamp":"2026-08-22T10:00:00Z","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":80,"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":10,"ephemeral_5m_input_tokens":0}}}}"#,
+        )
+        .unwrap();
+        let value = json!({
+            "transcript_path": transcript.path(),
+            "context_window": {
+                "used_percentage": 23.5,
+                "current_usage": {
+                    "input_tokens": 10,
+                    "cache_read_input_tokens": 80,
+                    "cache_creation_input_tokens": 10
+                }
+            },
+            "rate_limits": {"five_hour": {"used_percentage": 58.0}}
+        });
+        let snapshot = run_statusline(value.to_string().as_bytes()).unwrap();
+        let cache = snapshot.context.unwrap().cache.unwrap();
+        assert_eq!(cache.ttl_seconds, Some(60 * 60));
+        assert_eq!(cache.last_activity_unix, Some(1_787_392_800));
     }
 
     #[test]
