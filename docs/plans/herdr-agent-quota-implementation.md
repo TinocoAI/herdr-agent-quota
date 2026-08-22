@@ -119,11 +119,10 @@ Recommended compact values:
 ```text
 ● Owner · Grok
 B-325 budget cap
-week 39% reset 2d3h
+7d 39% 2d3h
 ● Owner · Claude
 refactor auth middleware
-5h 42% reset 3h07m
-week 73% reset 2d3h
+5h 42% 3h07m · 7d 73% 2d3h
 ```
 
 The same provider-level snapshot is repeated on every matching agent pane. Token
@@ -360,8 +359,9 @@ requests on the user's behalf.
 3. Back up the original once with a deterministic adjacent name.
 4. Retain Herdr's official `state_icon`/`tab` row (without the directory),
    add the plugin-owned `$quota_topic` as its own row, add
-   `$quota_provider` to the plane row, and add separate `$quota_5h` and
-   `$quota_week` rows. Herdr elides the missing 5h token for weekly-only agents.
+   `$quota_provider` to the plane row, and add one compact row containing the
+   styled `$quota_5h` and `$quota_week` variants. Herdr elides missing tokens
+   and their separators for weekly-only agents.
    The topic token is extracted from the latest user prompt on event refresh;
    it stays empty instead of falling back to AI status titles. This keeps every
    agent to three readable lines and shows the provider name only once. The

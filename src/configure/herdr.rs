@@ -454,9 +454,9 @@ fn normalize_official_row(row: Array) -> Array {
 }
 
 fn append_quota_rows(rows: &mut Array) {
-    // Keep the official state row, but split each quota window onto its own
-    // row. Herdr elides rows whose custom token is absent, so weekly-only
-    // providers do not gain a blank five-hour row.
+    // Keep the official state row and put both quota windows on one compact
+    // row. Herdr elides missing tokens and their separators, so weekly-only
+    // providers do not gain a blank five-hour segment.
     for row in rows.iter_mut() {
         let Some(items) = row.as_array_mut() else {
             continue;
@@ -534,29 +534,32 @@ fn append_quota_rows(rows: &mut Array) {
         Some(false),
     )));
 
-    append_window_rows(rows, "quota_5h");
-    append_window_rows(rows, "quota_week");
+    append_window_row(rows);
 }
 
-fn append_window_rows(rows: &mut Array, base: &str) {
-    rows.push(Value::Array(styled_row(
-        &format!("${base}_normal"),
-        Some(QUOTA_SAFE_COLOR),
-        Some(true),
-        Some(false),
-    )));
-    rows.push(Value::Array(styled_row(
-        &format!("${base}_warning"),
-        Some(QUOTA_WARNING_COLOR),
-        Some(true),
-        Some(false),
-    )));
-    rows.push(Value::Array(styled_row(
-        &format!("${base}_danger"),
-        Some(QUOTA_DANGER_COLOR),
-        Some(true),
-        Some(false),
-    )));
+fn append_window_row(rows: &mut Array) {
+    let mut row = Array::new();
+    for base in ["quota_5h", "quota_week"] {
+        row.push(styled_token(
+            &format!("${base}_normal"),
+            Some(QUOTA_SAFE_COLOR),
+            Some(true),
+            Some(false),
+        ));
+        row.push(styled_token(
+            &format!("${base}_warning"),
+            Some(QUOTA_WARNING_COLOR),
+            Some(true),
+            Some(false),
+        ));
+        row.push(styled_token(
+            &format!("${base}_danger"),
+            Some(QUOTA_DANGER_COLOR),
+            Some(true),
+            Some(false),
+        ));
+    }
+    rows.push(Value::Array(row));
 }
 
 fn styled_row(token: &str, fg: Option<&str>, bold: Option<bool>, dim: Option<bool>) -> Array {
@@ -582,7 +585,7 @@ fn styled_token(token: &str, fg: Option<&str>, bold: Option<bool>, dim: Option<b
 
 fn print_diff_hint() {
     println!("  keep Herdr's official state icon and plane tab");
-    println!("  show the user prompt before separate, severity-colored 5h/week rows");
+    println!("  show the user prompt before one compact, severity-colored 5h/7d row");
 }
 
 #[cfg(test)]
@@ -603,6 +606,25 @@ rows = [["state_icon", "agent"]]
         assert!(updated.contains("$quota_5h_warning"));
         assert!(updated.contains("$quota_week_danger"));
         assert_eq!(add_quota_row(&updated).unwrap(), updated);
+    }
+
+    #[test]
+    fn puts_both_quota_windows_on_one_color_preserving_row() {
+        let updated =
+            add_quota_row("[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n").unwrap();
+        let document = updated.parse::<DocumentMut>().unwrap();
+        let rows = document["ui"]["sidebar"]["agents"]["rows"]
+            .as_array()
+            .unwrap();
+        assert!(rows.iter().any(|row| {
+            let items = row.as_array().unwrap();
+            items
+                .iter()
+                .any(|item| configured_token_name(item) == Some("$quota_5h_normal"))
+                && items
+                    .iter()
+                    .any(|item| configured_token_name(item) == Some("$quota_week_normal"))
+        }));
     }
 
     #[test]
