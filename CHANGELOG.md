@@ -14,8 +14,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   TTL estimate when the provider exposes a cache bucket. Claude/Agy collectors
   use local statusLine/transcript data only; they do not log in or start model
   requests.
-- Quota rows now show a compact `reset` ETA: minutes below one hour, hours and
-  minutes below one day, and days plus hours for longer windows.
+- Quota rows now show compact `5h`/`7d` window labels with minutes below one
+  hour, hours and minutes below one day, and days plus hours for longer windows.
+- Claude's plugin-owned statusLine now receives the configured global watcher
+  interval as its native `refreshInterval`, keeping idle-session reset times
+  fresh without an API call or model request; existing user-owned intervals are
+  preserved.
 - Active turns now start one short-lived global refresh watcher for Claude,
   Codex, Grok, and Agy. It reads the working provider set once per poll,
   publishes statusLine cache updates, keeps active fetches debounced, stops
@@ -100,8 +104,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   amber accents, while metadata publication remains capped at sixteen tokens.
 - Quota formatting is centralized in one presentation module shared by the
   sidebar, dashboard, and statusLine fallbacks. Codex remains weekly-only.
-- Five-hour and weekly quota windows now occupy separate sidebar rows. Missing
-  five-hour tokens are cleared so Herdr elides that row for Codex and Grok.
+- Five-hour and weekly quota windows now share one compact sidebar row. Herdr
+  elides missing tokens and their separators, while each window keeps its own
+  dynamic health color.
 - Sidebar agent cards default to one blank row of separation, while preserving
   an existing `row_gap`. The latest user prompt now precedes compact,
   single-spaced quota rows, and percentages render as whole numbers.

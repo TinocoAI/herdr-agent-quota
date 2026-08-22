@@ -52,7 +52,7 @@ impl MetadataTokens {
                 Provider::Claude | Provider::Agy => Some(Severity::Unknown),
                 Provider::Codex | Provider::Grok => None,
             },
-            quota_week: "week N/A".to_string(),
+            quota_week: "7d N/A".to_string(),
             quota_week_severity: Some(Severity::Unknown),
             quota_summary: "unavailable".to_string(),
             quota_context: String::new(),
@@ -93,7 +93,7 @@ fn summary(snapshot: &ProviderSnapshot, now_unix: u64, include_left: bool) -> St
 fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind, now_unix: u64) -> String {
     snapshot
         .window(kind)
-        .map(|window| format_window(window, now_unix, false))
+        .map(|window| format_compact_window(window, now_unix))
         .unwrap_or_default()
 }
 
@@ -145,6 +145,18 @@ fn format_window(window: &UsageWindow, now_unix: u64, include_left: bool) -> Str
     };
     let eta = format_reset_eta(reset, now_unix);
     format!("{label} reset {eta}")
+}
+
+fn format_compact_window(window: &UsageWindow, now_unix: u64) -> String {
+    let label = match window.kind {
+        WindowKind::FiveHour => "5h",
+        WindowKind::Weekly => "7d",
+    };
+    let percent = format!("{}%", format_percent(window.remaining_percent));
+    let Some(reset) = window.resets_at else {
+        return format!("{label} {percent}");
+    };
+    format!("{label} {percent} {}", format_reset_eta(reset, now_unix))
 }
 
 fn format_reset_eta(reset_at: ResetAt, now_unix: u64) -> String {
@@ -259,6 +271,21 @@ mod tests {
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
         assert_eq!(values.quota_5h_severity, Some(Severity::Warning));
         assert_eq!(values.quota_week_severity, Some(Severity::Danger));
+    }
+
+    #[test]
+    fn metadata_uses_compact_quota_window_labels() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Claude,
+            vec![
+                window(WindowKind::FiveHour, 58.0, 14_820),
+                window(WindowKind::Weekly, 27.0, 183_600),
+            ],
+            0,
+        );
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_5h, "5h 42% 4h07m");
+        assert_eq!(values.quota_week, "7d 73% 2d3h");
     }
 
     #[test]

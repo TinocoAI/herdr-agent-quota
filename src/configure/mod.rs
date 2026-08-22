@@ -35,11 +35,14 @@ pub fn run(
                 .ok()
                 .and_then(|value| value.parse().ok())
         });
-        if let Some(interval) = interval {
+        let interval = if let Some(interval) = interval {
             cache.set_watch_interval_seconds(interval)?;
-        }
+            interval
+        } else {
+            cache.watch_interval_seconds()
+        };
         herdr::apply()?;
-        claude::apply()?;
+        claude::apply_with_refresh_interval(interval)?;
         agy::apply()?;
         grok::apply()?;
     } else {

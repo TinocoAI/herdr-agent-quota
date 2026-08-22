@@ -17,15 +17,14 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
   context 23%             ← provider-native context percentage
   cache 99.6% hit         ← cumulative for this session
   cache last 2m ago · ttl≈58m
-  5h 100% reset 3h07m
-  week 31% reset 2d3h
+  5h 100% 3h07m · 7d 31% 2d3h
 ```
 
 ![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
-*A real Herdr workspace: Claude shows separate five-hour and weekly reset
-ETAs, Codex and Grok show their weekly windows, and each agent card uses the
-latest user prompt rather than an AI-generated status.*
+*A real Herdr workspace: Claude shows five-hour and weekly reset ETAs on one
+compact row, Codex and Grok show their weekly windows, and each agent card uses
+the latest user prompt rather than an AI-generated status.*
 
 - **Four CLIs, one sidebar** — Claude Code, Codex, Grok, Agy/Antigravity.
 - **Compact, capability-aware cards** — provider, prompt/session summary,
@@ -102,7 +101,10 @@ herdr plugin action invoke herdr-agent-quota.configure
 
 The configure action consistently uses Herdr's plugin state, applies the
 sidebar rows, installs or repairs the reversible Claude and Agy statusLine
-collectors, and reloads Herdr's config. You can
+collectors, and reloads Herdr's config. Claude's native statusLine refresh is
+also aligned with the same watcher interval (60 seconds by default), so an
+idle session receives fresh reset timestamps without a provider login or model
+request. You can
 run it again safely from Herdr's action menu as **Install / repair agent quota**.
 Use **Refresh agent quota** for a one-shot refresh, or
 press `prefix+shift+r` after configuration. The shortcut force-fetches Codex
@@ -172,7 +174,7 @@ long turns no longer start one refresh command per tool call.
 
 | CLI | Sidebar windows | Local collection path | Extra setup |
 | --- | --- | --- | --- |
-| Claude Code `2.1.233` | `5h` + `week` + context + cache hit/approx. TTL | Official `statusLine` JSON: `rate_limits`, `context_window`, and `transcript_path` | The configure action installs and chains it automatically |
+| Claude Code `2.1.233` | `5h` + `7d` + context + cache hit/approx. TTL | Official `statusLine` JSON: `rate_limits`, `context_window`, and `transcript_path` | The configure action installs/chains it and keeps its refresh interval current |
 | OpenAI Codex `0.147.0` | `week` + local session summary | One-shot local `codex app-server --stdio`: quota and bounded `thread/list` | ChatGPT subscription login; API-key mode is shown as unavailable |
 | Grok CLI / Grok Build `1.0.4` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Covered by the unified watcher; no response hook is installed |
 | Agy / Antigravity CLI `1.1.13` | `5h` + `week` + context + cache hit | Official `statusLine` JSON: `quota` and `context_window` | The configure action installs and chains it automatically |
@@ -182,8 +184,10 @@ parser follows the provider fields rather than hard-coding these version
 strings, so newer compatible CLI releases can continue to work.
 
 The sidebar shows **percentage remaining** and the time until each quota reset,
-not quota token counts. Claude and Agy also show provider-reported context
-percentage. When a statusLine transcript and session id are available,
+not quota token counts. The two Claude windows use compact `5h` and `7d`
+labels on one row; each still keeps its own dynamic health color. Claude and
+Agy also show provider-reported context percentage. When a statusLine transcript
+and session id are available,
 `cache N.N% hit` is the cumulative main-session ratio
 (`read / (fresh + creation + read)`), not the latest turn. The next row shows
 how long ago the latest cache-bearing response arrived and, for Claude, a
@@ -224,12 +228,14 @@ rows = [
   [{ token = "$quota_topic", dim = false }],
   [{ token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false }],
   [{ token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false }],
-  [{ token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false }],
-  [{ token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false }],
-  [{ token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false }],
-  [{ token = "$quota_week_normal", fg = "#84b084", bold = true, dim = false }],
-  [{ token = "$quota_week_warning", fg = "#cdaa65", bold = true, dim = false }],
-  [{ token = "$quota_week_danger", fg = "#ca6470", bold = true, dim = false }],
+  [
+    { token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false },
+    { token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false },
+    { token = "$quota_5h_danger", fg = "#ca6470", bold = true, dim = false },
+    { token = "$quota_week_normal", fg = "#84b084", bold = true, dim = false },
+    { token = "$quota_week_warning", fg = "#cdaa65", bold = true, dim = false },
+    { token = "$quota_week_danger", fg = "#ca6470", bold = true, dim = false },
+  ],
 ]
 ```
 
@@ -251,12 +257,13 @@ rows = [
   fields are hidden instead of guessed.
 - The context row uses a violet accent (`#9b8fd8`) so context pressure is easy
   to distinguish from the green/amber/red quota runway colors.
-- Each window publishes exactly one styled variant. Color follows runway rather
-  than a fixed quota threshold: remaining quota is compared with the percentage
-  of window time still left. At or ahead of pace is green; behind pace is
-  amber; behind pace with less than 20% quota remaining is red. Missing or
-  expired reset data uses the warning color. Herdr hides all absent variants,
-  including the unsupported 5h row for Codex/Grok.
+- Each window publishes exactly one styled variant. Herdr renders adjacent
+  values on the same row with `·` separators and removes separators for missing
+  values, so 5h/7d stay compact while retaining independent colors. Color
+  follows runway rather than a fixed quota threshold: remaining quota is
+  compared with the percentage of window time still left. At or ahead of pace
+  is green; behind pace is amber; behind pace with less than 20% quota remaining
+  is red. Missing or expired reset data uses the warning color.
 - `row_gap = 1` adds one blank row between agent cards. An existing explicit
   `row_gap` value is preserved.
 - `$quota_5h`, `$quota_week`, and `$quota_summary` remain available for custom
@@ -301,12 +308,16 @@ such as `Thinking` or `Executing`. It does not show the working directory.
   debounce limit active requests; it never logs in or refreshes the key.
 - **Claude Code:** the official [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline)
   supplies the five-hour, seven-day, context-used percentage, and latest
-  cache counters. A previous statusLine command is backed up, chained, and
-  restored by the uninstall action. When a transcript path and session id are
-  present, the hook accumulates the main session's assistant usage using a
-  byte offset; the first update reads the existing transcript once and later
-  updates read only appended lines. A cache bucket gives the explicitly
-  approximate `ttl≈...`; there is no network request or model turn.
+  cache counters. Configure sets Claude's native `refreshInterval` to the
+  unified watcher interval when it is plugin-owned (60 seconds by default),
+  so an idle session refreshes its absolute reset timestamps; an existing
+  user-owned interval is preserved. A previous statusLine command is backed
+  up, chained, and restored by the uninstall action. When a transcript path
+  and session id are present, the hook accumulates the main session's
+  assistant usage using a byte offset; the first update reads the existing
+  transcript once and later updates read only appended lines. A cache bucket
+  gives the explicitly approximate `ttl≈...`; there is no network request or
+  model turn.
 - **Agy/Antigravity:** the official [`/usage` and statusline docs](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
   supply Gemini and third-party pools plus context-used percentage and cache
   counters. When both pools exist, the sidebar uses the lowest remaining
@@ -328,6 +339,7 @@ weekly value instead of clearing the sidebar.
 | --- | --- |
 | The rows do not appear | Run `herdr server reload-config`, then **Refresh agent quota**. |
 | Claude or Agy is `N/A` | Start a conversation so the native `statusLine` emits JSON; then refresh. |
+| Claude reset time stays stale while the pane is idle | Run **Install / repair agent quota**, then restart the already-running Claude pane once so it loads the native statusLine refresh interval. |
 | Claude briefly changes while switching panes | The cached value is retained; run one prompt or a manual refresh if no snapshot exists yet. |
 | Agy has no quota | Run **Install / repair agent quota**, start one Agy turn, then manually refresh. |
 | A running Grok goal stays stale | Run **Install / repair agent quota**, then start the next turn; the unified watcher will pick up working sessions. |

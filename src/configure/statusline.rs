@@ -29,6 +29,16 @@ impl Adapter {
     }
 
     pub fn apply(&self, path: &Path, state: &Path, executable: &Path) -> Result<()> {
+        self.apply_with_refresh_interval(path, state, executable, None)
+    }
+
+    pub fn apply_with_refresh_interval(
+        &self,
+        path: &Path,
+        state: &Path,
+        executable: &Path,
+        refresh_interval_seconds: Option<u64>,
+    ) -> Result<()> {
         let mut settings = read_settings(path, self.label)?;
         let installed = self.is_installed(settings.get("statusLine"));
         if !installed && !can_chain_statusline(settings.get("statusLine")) {
@@ -64,9 +74,20 @@ impl Adapter {
                     "command".to_string(),
                     Value::String(wrapper_command.clone()),
                 );
+                if let Some(seconds) = refresh_interval_seconds {
+                    if installed || !object.contains_key("refreshInterval") {
+                        object.insert("refreshInterval".to_string(), Value::from(seconds));
+                    }
+                }
                 Value::Object(object.clone())
             })
-            .unwrap_or_else(|| json!({"type": "command", "command": wrapper_command}));
+            .unwrap_or_else(|| {
+                let mut value = json!({"type": "command", "command": wrapper_command});
+                if let Some(seconds) = refresh_interval_seconds {
+                    value["refreshInterval"] = Value::from(seconds);
+                }
+                value
+            });
         settings["statusLine"] = status_line;
         write_settings(path, &settings, self.label)
     }

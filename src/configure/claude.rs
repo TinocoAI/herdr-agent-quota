@@ -1,5 +1,5 @@
 use super::statusline::{settings_path, Adapter};
-use crate::cache::CacheStore;
+use crate::cache::{CacheStore, DEFAULT_WATCH_INTERVAL_SECONDS};
 use crate::model::Provider;
 use crate::providers::claude::parse_statusline;
 use crate::providers::statusline::enrich_cache_session;
@@ -25,10 +25,22 @@ pub fn check() -> Result<()> {
 pub fn apply() -> Result<()> {
     let cache = CacheStore::from_env()?;
     let executable = std::env::current_exe().context("resolve plugin executable")?;
-    apply_at(
+    apply_at_with_refresh_interval(
         &settings_path("CLAUDE_SETTINGS_FILE", ".claude/settings.json")?,
         cache.root(),
         &executable,
+        cache.watch_interval_seconds(),
+    )
+}
+
+pub fn apply_with_refresh_interval(refresh_interval_seconds: u64) -> Result<()> {
+    let cache = CacheStore::from_env()?;
+    let executable = std::env::current_exe().context("resolve plugin executable")?;
+    apply_at_with_refresh_interval(
+        &settings_path("CLAUDE_SETTINGS_FILE", ".claude/settings.json")?,
+        cache.root(),
+        &executable,
+        refresh_interval_seconds,
     )
 }
 
@@ -41,7 +53,16 @@ pub fn uninstall() -> Result<()> {
 }
 
 pub fn apply_at(settings: &Path, state: &Path, executable: &Path) -> Result<()> {
-    CONFIG.apply(settings, state, executable)
+    apply_at_with_refresh_interval(settings, state, executable, DEFAULT_WATCH_INTERVAL_SECONDS)
+}
+
+pub fn apply_at_with_refresh_interval(
+    settings: &Path,
+    state: &Path,
+    executable: &Path,
+    refresh_interval_seconds: u64,
+) -> Result<()> {
+    CONFIG.apply_with_refresh_interval(settings, state, executable, Some(refresh_interval_seconds))
 }
 
 pub fn uninstall_at(settings: &Path, state: &Path) -> Result<()> {
