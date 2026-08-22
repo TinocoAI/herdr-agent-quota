@@ -18,7 +18,7 @@
 
 3. **“缓存还剩几分钟”只有 Claude 可以做一个近似显示，而且不应作为准确 expiry。** Claude API 返回 5m/1h 写入桶，官方说明缓存使用时会刷新，且 TTL 从请求开始计时；statusLine 本身没有 entry 的 `created_at`/`expires_at`。开源项目通过读取当前会话 transcript 的尾部推断 TTL 桶和最近 timestamp，但这仍是近似值，不能代表多个 cache breakpoint 的统一到期时间。
 4. **Codex/OpenAI、Agy、Grok 当前没有可供本插件诚实显示的动态 cache-entry expiry。** OpenAI 的 `prompt_cache_options.ttl` 是请求策略（不是活动 cache entry 的剩余时间）；Agy/Grok status payload 只有 token 计数；Codex token-usage event 也没有 expiry timestamp。
-5. **实现把 context、session cache 命中率、最近发送距今与 TTL 估算拆成三行。** `$quota_context` 紧跟 provider 名称；`$quota_cache` 显示整个主 session 的累计命中率（固定一位小数，避免 99.6% 被四舍五入成 100%）；`$quota_cache_ttl` 显示 `cache last 2m ago · ttl≈58m`。计数来自正在运行的 CLI/statusLine 输入和本地 transcript，不联网、不登录、不消耗模型 token。Claude 在 statusLine 同时提供明确 5m/1h bucket 时显示带 `≈` 的 TTL；证据不足只显示已知的 last 时间或隐藏未知部分。
+5. **实现把 context 与 cache 诊断拆开，但 cache 命中率和剩余 TTL 共用一行。** `$quota_context` 紧跟 provider 名称；`$quota_cache` 显示整个主 session 的累计命中率（固定一位小数，避免 99.6% 被四舍五入成 100%）；`$quota_cache_ttl` 只显示 `ttl≈58m`。计数来自正在运行的 CLI/statusLine 输入和本地 transcript，不联网、不登录、不消耗模型 token。Claude 在 statusLine 同时提供明确 5m/1h bucket 时显示带 `≈` 的 TTL；证据不足就隐藏未知部分。
 
 ## 四个 provider 的可获取字段
 
@@ -115,8 +115,8 @@ Antigravity CLI v1.1.7 起在 `json`/`stream-json` usage 中增加 `cache_read_t
 
 ### 有界 TTL 诊断层
 
-本项目采用 ilia 项目的 bucket/timestamp 口径：session 首次建立累计时读取 transcript，之后每次只读新增字节；TTL 行显示
-`cache last 2m ago · ttl≈54m` 这类带剩余时间的本地估算（5m/1h bucket），不显示“expires in”。任何解析失败、compact、字段缺失
+本项目采用 ilia 项目的 bucket/timestamp 口径：session 首次建立累计时读取 transcript，之后每次只读新增字节；TTL token 显示
+`ttl≈54m` 这类带剩余时间的本地估算（5m/1h bucket），不显示“expires in”或最近发送时间。任何解析失败、compact、字段缺失
 都不生成新估算；跨 session 不继承旧 TTL，避免误报。该扫描发生在已有 statusLine hook 内，不是全局 watcher，也不读取 pane。
 
 ### 明确不做

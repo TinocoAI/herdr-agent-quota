@@ -15,8 +15,7 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 ● Owner · Claude
   hi                     ← what that pane is actually working on
   context 23%             ← provider-native context percentage
-  cache 99.6% hit         ← cumulative for this session
-  cache last 2m ago · ttl≈58m
+  cache 99.6% · ttl≈58m    ← session hit rate · remaining cache TTL
   5h 100% 3h07m · 7d 31% 2d3h
 ```
 
@@ -188,12 +187,12 @@ not quota token counts. The two Claude windows use compact `5h` and `7d`
 labels on one row; each still keeps its own dynamic health color. Claude and
 Agy also show provider-reported context percentage. When a statusLine transcript
 and session id are available,
-`cache N.N% hit` is the cumulative main-session ratio
-(`read / (fresh + creation + read)`), not the latest turn. The next row shows
-how long ago the latest cache-bearing response arrived and, for Claude, a
-`ttl≈...` estimate from the provider's 5-minute/1-hour bucket. This is local
-diagnostic math, not a server-confirmed expiry; the first session update reads
-the existing transcript once, then later updates read only appended bytes.
+`cache N.N%` is the cumulative main-session ratio
+(`read / (fresh + creation + read)`), not the latest turn. The same row shows,
+for Claude, a `ttl≈...` estimate from the provider's 5-minute/1-hour bucket.
+This is local diagnostic math, not a server-confirmed expiry; the first session
+update reads the existing transcript once, then later updates read only
+appended bytes.
 Codex shows a short session preview from its local state database; its live
 context and cache fields are not queried because the current safe app-server
 connection is quota-only and does not attach to an active thread. Grok's
@@ -226,8 +225,10 @@ row_gap = 1 # herdr-agent-quota
 rows = [
   ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }, { token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
-  [{ token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false }],
-  [{ token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false }],
+  [
+    { token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false },
+    { token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false },
+  ],
   [
     { token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false },
     { token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false },
@@ -251,10 +252,9 @@ rows = [
 - `$quota_context` is the provider-reported context **used** percentage and sits
   directly after the provider name. `$quota_cache` is the cumulative hit rate
   for the main session transcript, not a per-turn value; it is shown to one
-  decimal place so `99.6%` is not rounded to `100%`. `$quota_cache_ttl` shows
-  the elapsed time since the latest cache-bearing assistant response and, when
-  Claude exposes a 5m/1h bucket, the remaining `ttl≈...` estimate. Missing
-  fields are hidden instead of guessed.
+  decimal place so `99.6%` is not rounded to `100%`. `$quota_cache_ttl` is the
+  remaining approximate TTL when Claude exposes a 5m/1h bucket. Both cache
+  values share one row; missing fields are hidden instead of guessed.
 - The context row uses a violet accent (`#9b8fd8`) so context pressure is easy
   to distinguish from the green/amber/red quota runway colors.
 - Each window publishes exactly one styled variant. Herdr renders adjacent
