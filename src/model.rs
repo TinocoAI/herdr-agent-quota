@@ -393,8 +393,8 @@ impl ProviderSnapshot {
 
     pub fn severity(&self, now_unix: u64) -> Severity {
         let relevant = match self.provider {
-            Provider::Codex | Provider::Grok => self.window(WindowKind::Weekly),
-            Provider::Claude | Provider::Agy => self
+            Provider::Grok => self.window(WindowKind::Weekly),
+            Provider::Codex | Provider::Claude | Provider::Agy => self
                 .window(WindowKind::FiveHour)
                 .or_else(|| self.window(WindowKind::Weekly)),
         };
@@ -565,6 +565,36 @@ mod tests {
         assert_eq!(Severity::for_window(&healthy, now), Severity::Normal);
         assert_eq!(Severity::for_window(&behind, now), Severity::Warning);
         assert_eq!(Severity::for_window(&danger, now), Severity::Danger);
+    }
+
+    #[test]
+    fn codex_severity_prefers_the_five_hour_window_when_available() {
+        let now = 1_000_000;
+        let snapshot = ProviderSnapshot::new(
+            Provider::Codex,
+            vec![
+                UsageWindow::new(
+                    WindowKind::FiveHour,
+                    90.0,
+                    Some(ResetAt::after(
+                        now,
+                        WindowKind::FiveHour.duration_seconds() / 2,
+                    )),
+                )
+                .unwrap(),
+                UsageWindow::new(
+                    WindowKind::Weekly,
+                    10.0,
+                    Some(ResetAt::after(
+                        now,
+                        WindowKind::Weekly.duration_seconds() / 2,
+                    )),
+                )
+                .unwrap(),
+            ],
+            now,
+        );
+        assert_eq!(snapshot.severity(now), Severity::Danger);
     }
 
     #[test]

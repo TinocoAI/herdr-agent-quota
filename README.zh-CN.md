@@ -5,7 +5,7 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 
 [![CI](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml/badge.svg)](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Herdr plugin](https://img.shields.io/badge/Herdr-plugin-0.8%2B-5b6ee1)](https://herdr.dev/docs/plugins/)
+[![Herdr plugin](https://img.shields.io/badge/Herdr-plugin-supported-5b6ee1)](https://herdr.dev/docs/plugins/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/levi-qiao/herdr-agent-quota?style=social)](https://github.com/levi-qiao/herdr-agent-quota)
 
@@ -21,11 +21,11 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 
 ![Herdr 左侧额度截图](docs/screenshots/herdr-sidebar-live.png)
 
-*真实的 Herdr 工作区：Claude 在一行紧凑显示 5 小时和 7 天额度及其重置倒计时，
-Codex、Grok 显示周额度；每张 agent 卡片的话题来自用户最后一次输入，
+*真实的 Herdr 工作区：Claude 和 Codex 在一行紧凑显示 5 小时和 7 天额度及其重置倒计时，
+Grok 显示周额度；每张 agent 卡片的话题来自用户最后一次输入，
 不会使用 AI 生成的状态标题。*
 
-- **四个 CLI，一个侧栏** —— Claude Code、Codex、Grok、Agy/Antigravity。
+- **四个 provider，一个侧栏** —— Claude Code、OpenAI Codex、Grok、Agy/Antigravity。
 - **按能力显示的紧凑卡片** —— provider、当前输入/会话摘要、可用的 context
   百分比和额度窗口；不支持的行自动隐藏。
 - **全本地** —— 不上传任何用量数据，不读浏览器 cookie 和系统钥匙串，
@@ -66,8 +66,8 @@ Codex、Grok 显示周额度；每张 agent 卡片的话题来自用户最后一
 
 ## 快速开始
 
-要求：Herdr `0.8.0+`、Rust `1.95+`、macOS 或 Linux，以及至少一个支持的
-CLI。下载仓库后，在目录中执行下面的一键安装命令即可完成构建、链接、启用和
+要求：Herdr、Rust 工具链、macOS 或 Linux，以及至少一个支持的 provider CLI。
+下载仓库后，在目录中执行下面的一键安装命令即可完成构建、链接、启用和
 可恢复配置：
 
 ```sh
@@ -143,17 +143,14 @@ action 完成后，如需连插件注册也删除，再执行
 usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会删除插件
 添加的行，并恢复原来的 Claude/Agy `statusLine`。
 
-## 支持的 CLI
+## 支持的 provider
 
-| CLI | 侧栏显示 | 本地数据来源 | 额外配置 |
+| Provider | 侧栏显示 | 本地数据来源 | 额外配置 |
 | --- | --- | --- | --- |
-| Claude Code `2.1.233` | `5h` + `7d` + context + 缓存命中率/近似 TTL | 官方 `statusLine` JSON：`rate_limits`、`context_window`、`transcript_path` | 配置 action 自动安装/串联，并保持原生刷新间隔与 watcher 一致 |
-| OpenAI Codex `0.147.0` | `week` + 本地会话摘要 | 一次性的 `codex app-server --stdio`：额度和有上限的 `thread/list` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用；不会 resume thread |
-| Grok CLI / Grok Build `1.0.4` | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 由统一 watcher 处理，不再安装回复 hook |
-| Agy / Antigravity CLI `1.1.13` | `5h` + `week` + context + 缓存命中率 | 官方 `statusLine` JSON 的 `quota` 和 `context_window` | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
-
-上面的版本是 2026-08-15 在开发机上实际检查的版本。解析器按照供应商的
-字段工作，不会把这些版本号写死；兼容的新版本可以继续使用。
+| Claude Code | `5h` + `7d` + context + 缓存命中率/近似 TTL | 官方 `statusLine` JSON：`rate_limits`、`context_window`、`transcript_path` | 配置 action 自动安装/串联，并保持原生刷新间隔与 watcher 一致 |
+| OpenAI Codex | `5h` + `7d` + 本地会话摘要 | 一次性的 `codex app-server --stdio`：额度和有上限的 `thread/list` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用；不会 resume thread |
+| Grok CLI / Grok Build | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 由统一 watcher 处理，不再安装回复 hook |
+| Agy / Antigravity CLI | `5h` + `week` + context + 缓存命中率 | 官方 `statusLine` JSON 的 `quota` 和 `context_window` | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
 
 侧栏显示的是**额度剩余百分比**和距离下次额度重置的时间，不是额度 token 数量。
 Claude 的两个窗口会用紧凑的 `5h` 和 `7d` 标签放在同一行，但仍各自保留动态健康色。
@@ -161,7 +158,8 @@ Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context
 如果有 statusLine transcript 和 session id，`cache N.N%` 是主 session 的累计命中率
 （`read / (fresh + creation + read)`），不是最新一轮；同一行在 Claude 有明确的
 5 分钟/1 小时缓存桶时显示剩余 `ttl≈...`，这是本地近似，不是服务端确认的过期时间。
-首次 session 更新会读取一次已有 transcript，之后只读新增字节。Codex 会显示本地 state database 里的短会话预览；
+首次 session 更新会读取一次已有 transcript，之后只读新增字节。Codex 会显示 5 小时和
+7 天额度，以及本地 state database 里的短会话预览；
 当前安全的 app-server 连接只查额度，没有绑定活动 thread，因此不猜测 Codex context
 或缓存字段。Grok 当前的 billing 来源没有 context 或缓存字段。没有证据的字段会隐藏，
 不会伪造 `cached expires`：
@@ -174,7 +172,8 @@ Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context
   5h 100% 3h07m · 7d 31% 2d3h
 ```
 
-Codex 和 Grok 提供周额度；Claude Code 和 Agy 提供 5 小时额度与周额度。
+Codex 提供 5 小时和周额度；Grok 提供周额度；Claude Code 和 Agy 提供 5 小时额度与
+周额度。
 不到一小时显示分钟，不到一天显示小时和分钟，超过一天显示天和小时。
 侧栏数值在 agent 事件、working turn 的短生命周期刷新脉冲或手动刷新时重新计算，
 不是常驻的逐分钟跳动倒计时。
@@ -241,7 +240,7 @@ rows = [
   Herdr metadata 始终不超过 16 个 token；升级时会清理旧的 `$quota_icon`/
   `$quota_status` 字段。
 
-Herdr 0.8 的样式只接受固定十六进制颜色，不支持跟随主题的语义色。
+Herdr 的样式只接受固定十六进制颜色，不支持跟随主题的语义色。
 默认的绿色、琥珀色和红色采用高明度柔和色阶并加粗，降低 Herdr 深色侧栏
 长时间阅读的视觉疲劳，同时保持状态辨识度。
 
@@ -249,7 +248,7 @@ Provider 品牌样式通过 Herdr 静态 `rows_by_agent` 投影实现，额度�
 使用动态 metadata。两者相互独立，也不会为静态名称额外占用 metadata token
 容量。
 
-Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 注入
+Herdr plugin API 只支持文本 token，不能由插件向原生 Agent renderer 注入
 品牌 SVG/PNG。因此默认使用清晰的 provider 名称和 Herdr 原生圆点，不再
 添加辨识度不高的 Unicode 图标。仓库中的 [`docs/icons/`](docs/icons/) 只
 作为可选视觉参考，不会被注入左侧原生 sidebar。
@@ -263,9 +262,10 @@ Herdr plugin v1 只支持文本 token，不能由插件向原生 Agent renderer 
 - **Codex：** 使用本地官方
   [app-server JSON-RPC](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
   的 rate-limit 响应，并在同一进程里做一次有上限、只读 state database 的
-  `thread/list` 获取会话预览，按窗口时长识别周额度。不会 resume thread，也不读
-  rollout JSONL，因此不会声称拿到了实时 context 百分比。只保留最多 50 个预览的首个
-  非空行，并截断到 80 个字符。API key 登录不会被误标记为 ChatGPT 订阅额度。
+  `thread/list` 获取会话预览，按窗口时长识别 5 小时和 7 天额度，不依赖
+  `primary`/`secondary` 的位置。不会 resume thread，也不读 rollout JSONL，因此不会
+  声称拿到了实时 context 百分比。只保留最多 50 个预览的首个非空行，并截断到 80 个
+  字符。API key 登录不会被误标记为 ChatGPT 订阅额度。
 - **Grok：** 在内存中读取本地 `~/.grok/auth.json` 登录 key，访问 Grok CLI
   使用的周额度接口。只有明确标记为 weekly 的响应才会接受。这是
   SuperGrok 订阅额度，不是 xAI 开发者/API team 账单。统一 watcher 配合原有

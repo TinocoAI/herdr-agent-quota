@@ -16,6 +16,8 @@ use std::time::Duration;
 use std::os::unix::process::CommandExt;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const FIVE_HOUR_WINDOW_MINUTES: u64 = 5 * 60;
+const WEEKLY_WINDOW_MINUTES: u64 = 7 * 24 * 60;
 
 pub fn parse_rate_limits(
     value: &Value,
@@ -26,38 +28,65 @@ pub fn parse_rate_limits(
         .get("rateLimits")
         .or_else(|| result.get("rate_limits"))
         .ok_or_else(|| ProviderError::UnsupportedResponse("missing rateLimits".to_string()))?;
-    let objects = [limits.get("primary"), limits.get("secondary")]
+    let mut windows = Vec::new();
+    for candidate in [limits.get("primary"), limits.get("secondary")]
         .into_iter()
-        .flatten();
-    let weekly = objects
-        .filter_map(|candidate| {
-            let duration = candidate
-                .get("windowDurationMins")
-                .or_else(|| candidate.get("window_duration_mins"))
-                .and_then(Value::as_u64)?;
-            if duration != 10_080 {
-                return None;
-            }
-            let used = candidate
-                .get("usedPercent")
-                .or_else(|| candidate.get("used_percent"))
-                .and_then(Value::as_f64)?;
-            let reset = candidate
-                .get("resetsAt")
-                .or_else(|| candidate.get("resets_at"))
-                .and_then(Value::as_u64)
-                .map(ResetAt::from_unix_seconds);
-            Some((used, reset))
-        })
-        .next()
-        .ok_or_else(|| ProviderError::UnsupportedResponse("no seven-day rate limit".to_string()))?;
-    let window = UsageWindow::new(WindowKind::Weekly, weekly.0, weekly.1)
-        .map_err(|error| ProviderError::UnsupportedResponse(error.to_string()))?;
+        .flatten()
+    {
+        let Some(kind) = candidate
+            .get("windowDurationMins")
+            .or_else(|| candidate.get("window_duration_mins"))
+            .and_then(Value::as_u64)
+            .and_then(window_kind)
+        else {
+            continue;
+        };
+        if windows
+            .iter()
+            .any(|window: &UsageWindow| window.kind == kind)
+        {
+            continue;
+        }
+        let Some(used) = candidate
+            .get("usedPercent")
+            .or_else(|| candidate.get("used_percent"))
+            .and_then(Value::as_f64)
+        else {
+            continue;
+        };
+        let reset = candidate
+            .get("resetsAt")
+            .or_else(|| candidate.get("resets_at"))
+            .and_then(parse_reset);
+        let window = UsageWindow::new(kind, used, reset)
+            .map_err(|error| ProviderError::UnsupportedResponse(error.to_string()))?;
+        windows.push(window);
+    }
+    if windows.is_empty() {
+        return Err(ProviderError::UnsupportedResponse(
+            "no supported rate limit windows".to_string(),
+        ));
+    }
     Ok(ProviderSnapshot::new(
         Provider::Codex,
-        vec![window],
+        windows,
         fetched_at_unix,
     ))
+}
+
+fn window_kind(duration_minutes: u64) -> Option<WindowKind> {
+    match duration_minutes {
+        FIVE_HOUR_WINDOW_MINUTES => Some(WindowKind::FiveHour),
+        WEEKLY_WINDOW_MINUTES => Some(WindowKind::Weekly),
+        _ => None,
+    }
+}
+
+fn parse_reset(value: &Value) -> Option<ResetAt> {
+    value
+        .as_u64()
+        .map(ResetAt::from_unix_seconds)
+        .or_else(|| value.as_str().and_then(ResetAt::parse))
 }
 
 pub fn fetch() -> Result<ProviderSnapshot> {
@@ -311,7 +340,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn selects_weekly_codex_window_by_duration_not_position() {
+    fn selects_codex_windows_by_duration_not_position() {
         let value = json!({
             "result": {"rateLimits": {
                 "primary": {"usedPercent": 20.0, "windowDurationMins": 300, "resetsAt": 1786795200},
@@ -319,6 +348,11 @@ mod tests {
             }}
         });
         let snapshot = parse_rate_limits(&value, 1).unwrap();
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(
+            snapshot.window(WindowKind::FiveHour).unwrap().resets_at,
+            Some(ResetAt::from_unix_seconds(1_786_795_200))
+        );
         assert_eq!(
             snapshot.window(WindowKind::Weekly).unwrap().resets_at,
             Some(ResetAt::from_unix_seconds(1_787_400_000))
@@ -326,9 +360,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_codex_response_without_seven_day_window() {
+    fn accepts_a_codex_response_with_only_the_five_hour_window() {
         let value = json!({"result": {"rateLimits": {
             "primary": {"usedPercent": 20.0, "windowDurationMins": 300}
+        }}});
+        let snapshot = parse_rate_limits(&value, 1).unwrap();
+        assert_eq!(snapshot.windows.len(), 1);
+        assert!(snapshot.window(WindowKind::FiveHour).is_some());
+    }
+
+    #[test]
+    fn rejects_codex_response_without_supported_windows() {
+        let value = json!({"result": {"rateLimits": {
+            "primary": {"usedPercent": 20.0, "windowDurationMins": 60}
         }}});
         assert!(parse_rate_limits(&value, 1).is_err());
     }

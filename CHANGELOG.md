@@ -32,6 +32,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Codex quota parsing now keeps both provider-reported five-hour and seven-day
+  windows. It identifies each window by duration instead of assuming that
+  `primary` or `secondary` has a fixed meaning, so the restored five-hour limit
+  appears in the sidebar again.
 - Grok no longer sticks at `week 0%` after `grok login` switches accounts. A
   fresh SuperGrok week omits `creditUsagePercent` (proto3 JSON drops zeros),
   which the parser treated as an unsupported response and then kept the previous
@@ -124,7 +128,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   teal and amber accents, while metadata publication remains capped at sixteen
   tokens.
 - Quota formatting is centralized in one presentation module shared by the
-  sidebar, dashboard, and statusLine fallbacks. Codex remains weekly-only.
+  sidebar, dashboard, and statusLine fallbacks. Codex now publishes both its
+  five-hour and weekly windows when the provider reports them.
 - Five-hour and weekly quota windows now share one compact sidebar row. Herdr
   elides missing tokens and their separators, while each window keeps its own
   dynamic health color.

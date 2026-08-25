@@ -3,7 +3,7 @@
 > 研究日期：2026-08-15（Asia/Shanghai）  
 > 范围：本仓库现有四个 provider（Codex、Grok、Claude Code、Agy/Antigravity）。  
 > 来源约束：只使用供应商官方文档/官方 CLI 源码，以及本仓库已有 parser、fixture 和类型；没有用二手文章推断供应商字段。
-> 产品决策：虽然 Codex 5h 窗口在能力上可推导，本次实施按需求仍只展示 Codex weekly。
+> 产品决策：Codex 按供应商返回的窗口时长展示 5h 和 weekly，不依赖 primary/secondary 的字段位置。
 
 ## 结论先行
 
@@ -11,7 +11,7 @@
 
 | CLI | 5h 窗口 | weekly 窗口 | 一手字段 | 当前实现结论 |
 | --- | --- | --- | --- | --- |
-| OpenAI Codex | `inferred`：官方 schema 支持按 `windowDurationMins` 描述窗口；仓库 fixture 使用 300 分钟 | `confirmed`：仓库 fixture 使用 10080 分钟，官方 schema 说明窗口时长与 reset 字段 | `resetsAt`，Unix epoch 秒（绝对时间） | 已实施 weekly-only，数字 reset 已归一化 |
+| OpenAI Codex | `inferred`：官方 schema 支持按 `windowDurationMins` 描述窗口；仓库 fixture 使用 300 分钟 | `confirmed`：仓库 fixture 使用 10080 分钟，官方 schema 说明窗口时长与 reset 字段 | `resetsAt`，Unix epoch 秒（绝对时间） | 已按窗口时长读取 5h 与 weekly，数字 reset 已归一化 |
 | Claude Code | `confirmed` | `confirmed` | `rate_limits.*.resets_at`，文档为 Unix 秒，2.1.233 statusLine 实现也可输出 RFC 3339 | 两种时间类型均已归一化 |
 | Grok CLI / Grok Build | `unsupported`：官方 credits config 只有当前 weekly/monthly period，没有 5h bucket | `confirmed` | `config.currentPeriod.end`，RFC 3339（绝对时间） | weekly `end` 已正确读取；不要从 weekly 猜造 5h |
 | Agy / Antigravity | `confirmed`（仓库已有 `gemini-5h`/`3p-5h` 合同） | `confirmed`（仓库已有 `gemini-weekly`/`3p-weekly` 合同） | `quota[*].reset_time`（绝对时间）或可选 `reset_in_seconds`（相对时长） | 5h/weekly 绝对字段已读取；相对字段未读取 |
@@ -40,7 +40,10 @@ Codex `app-server` 的官方 v0.147.0 文档在 `account/rateLimits/read` 中给
 
 本仓库的 Codex fixture 给出了实际选择所需的 300 分钟（5h）和 10080 分钟（7d）窗口（[`tests/fixtures/codex/rate-limits-weekly.json`](../../tests/fixtures/codex/rate-limits-weekly.json#L4-L13)）。因此建议把“按 duration 映射”视为仓库已验证合同，把 5h 的上游稳定性标成 `inferred`，不要按对象位置猜测。
 
-**当前 parser：** [`src/providers/codex.rs`](../../src/providers/codex.rs#L29-L58) 只保留 `duration >= 10_000` 的 weekly，并且 `resetsAt` 通过 `Value::as_str` 读取。官方数字 Unix 秒会被静默转换成 `None`；5h 被有意丢弃。也就是说，Codex **可以支持 weekly 的精确 reset，也能按官方 schema 支持 5h，但当前代码尚未支持这两件事的完整组合**。
+**当前 parser：** [`src/providers/codex.rs`](../../src/providers/codex.rs) 按
+`windowDurationMins` 将 300/10080 分钟分别映射为 5h/weekly，并兼容数字或文本
+形式的 `resetsAt`。因此 Codex 的两个窗口都会进入同一个快照，且不依赖
+`primary`/`secondary` 的位置。
 
 **实现边界：**
 
@@ -137,7 +140,7 @@ ResetAt(i64)                 # Unix 秒，统一绝对时间
 
 第一版不需要增加 `$quota_5h_reset`/`$quota_week_reset`。让 presentation module 统一生成现有 `$quota_5h`、`$quota_week`和 `$quota_summary`，即可同时满足默认布局、dashboard 和已有自定义布局。只有当第二种布局真的需要独立 reset 时，再扩大 token interface。
 
-这个 module 应根据 `snapshot.windows` 中实际存在的窗口按 `5h -> week` 排序，不再 `match Provider`来决定展示哪些窗口。因此 Codex 增加 5h 只是 adapter 多输出一个 window，Grok 仍只输出 week，presentation 代码不需要改。
+这个 module 应根据 `snapshot.windows` 中实际存在的窗口按 `5h -> week` 排序，不再 `match Provider`来决定展示哪些窗口。因此 Codex 输出两个窗口只需由 adapter 提供两个 window，Grok 仍只输出 week，presentation 代码不需要按 provider 分支。
 
 ### 4. 明确刷新语义
 
@@ -152,7 +155,7 @@ ResetAt(i64)                 # Unix 秒，统一绝对时间
 
 1. **先修合同：** 把 Codex/Claude fixture 改为官方 Unix 数字；Codex 增加 300/10080 分钟双窗口断言，Agy 增加仅 `reset_in_seconds` 样例。验证目标是先让现有 parser 在真实 schema 测试下暴露失败。
 2. **再建时间 seam：** 把 `UsageWindow.resets_at: Option<String>` 改为 typed `Option<ResetAt>`；Unix 数字直接归一化，RFC 3339 只在共享的小型解析 helper 中处理。现有依赖没有 RFC 3339 parser，实现时建议只增加一个轻量 `time` 依赖的 parsing 能力，不引入 async/runtime 或时区数据库。
-3. **逐个改 adapter：** Codex 按 duration 只输出 week；Claude 读 Unix reset；Grok 严格解析 weekly RFC 3339 end；Agy 保留最低池聚合并增加 relative fallback。每个提交都可以用该 adapter 的纯 parser 测试独立验证。
+3. **逐个改 adapter：** Codex 按 duration 输出 5h/week；Claude 读 Unix reset；Grok 严格解析 weekly RFC 3339 end；Agy 保留最低池聚合并增加 relative fallback。每个提交都可以用该 adapter 的纯 parser 测试独立验证。
 4. **最后接展示：** 引入共享 presentation module，让 metadata 和 dashboard 通过同一 interface 生成文本；删除重复的 provider-specific summary 分支，但不改 Herdr 布局和 token 名。
 
 这个顺序把 schema 正确性、内部模型、供应商 adapter 和 UI 变更分开；出问题时能直接定位在对应 module，不需要同时理解四家原始 JSON 与 Herdr 字符串布局。

@@ -5,7 +5,7 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 
 [![CI](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml/badge.svg)](https://github.com/levi-qiao/herdr-agent-quota/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Herdr plugin](https://img.shields.io/badge/Herdr-plugin-0.8%2B-5b6ee1)](https://herdr.dev/docs/plugins/)
+[![Herdr plugin](https://img.shields.io/badge/Herdr-plugin-supported-5b6ee1)](https://herdr.dev/docs/plugins/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/levi-qiao/herdr-agent-quota?style=social)](https://github.com/levi-qiao/herdr-agent-quota)
 
@@ -21,11 +21,12 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 
 ![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
-*A real Herdr workspace: Claude shows five-hour and weekly reset ETAs on one
-compact row, Codex and Grok show their weekly windows, and each agent card uses
+*A real Herdr workspace: Claude and Codex show five-hour and weekly reset ETAs
+on one compact row, Grok shows its weekly window, and each agent card uses
 the latest user prompt rather than an AI-generated status.*
 
-- **Four CLIs, one sidebar** — Claude Code, Codex, Grok, Agy/Antigravity.
+- **Four providers, one sidebar** — Claude Code, OpenAI Codex, Grok, and
+  Agy/Antigravity.
 - **Compact, capability-aware cards** — provider, prompt/session summary,
   supported context usage, and quota windows. Unsupported rows are hidden.
 - **Local only** — no usage data uploaded, no browser cookies, no keychain
@@ -73,8 +74,8 @@ every provider adapter; only the window data differs.
 
 ## Quick start
 
-Requirements: Herdr `0.8.0+`, Rust `1.95+`, macOS or Linux, and at least one
-supported CLI. If you downloaded this repository, the one-step installer does
+Requirements: Herdr, a Rust toolchain, macOS or Linux, and at least one
+supported provider CLI. If you downloaded this repository, the one-step installer does
 the build, link, enable, and reversible configuration for you:
 
 ```sh
@@ -114,7 +115,7 @@ the same action from a shell with:
 herdr plugin action invoke herdr-agent-quota.refresh
 ```
 
-Herdr plugin v1 does not currently let plugins add buttons to the native agent
+The Herdr plugin API does not currently let plugins add buttons to the native agent
 group header, so the shortcut is the closest stable one-step entry point.
 Selecting a pane also runs a provider-only refresh, debounced to once per
 minute. While any agent is working, one global background watcher polls the
@@ -171,18 +172,14 @@ Claude and Agy statusLine commands. Older plugin-owned Grok response hooks are
 removed during configure; the single global watcher now covers Grok as well, so
 long turns no longer start one refresh command per tool call.
 
-## Supported CLIs
+## Supported providers
 
-| CLI | Sidebar windows | Local collection path | Extra setup |
+| Provider | Sidebar windows | Local collection path | Extra setup |
 | --- | --- | --- | --- |
-| Claude Code `2.1.233` | `5h` + `7d` + context + cache hit/approx. TTL | Official `statusLine` JSON: `rate_limits`, `context_window`, and `transcript_path` | The configure action installs/chains it and keeps its refresh interval current |
-| OpenAI Codex `0.147.0` | `week` + local session summary | One-shot local `codex app-server --stdio`: quota and bounded `thread/list` | ChatGPT subscription login; API-key mode is shown as unavailable |
-| Grok CLI / Grok Build `1.0.4` | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Covered by the unified watcher; no response hook is installed |
-| Agy / Antigravity CLI `1.1.13` | `5h` + `week` + context + cache hit | Official `statusLine` JSON: `quota` and `context_window` | The configure action installs and chains it automatically |
-
-Versions above were checked on the development machine on 2026-08-15. The
-parser follows the provider fields rather than hard-coding these version
-strings, so newer compatible CLI releases can continue to work.
+| Claude Code | `5h` + `7d` + context + cache hit/approx. TTL | Official `statusLine` JSON: `rate_limits`, `context_window`, and `transcript_path` | The configure action installs/chains it and keeps its refresh interval current |
+| OpenAI Codex | `5h` + `7d` + local session summary | One-shot local `codex app-server --stdio`: quota and bounded `thread/list` | ChatGPT subscription login; API-key mode is shown as unavailable |
+| Grok CLI / Grok Build | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Covered by the unified watcher; no response hook is installed |
+| Agy / Antigravity CLI | `5h` + `week` + context + cache hit | Official `statusLine` JSON: `quota` and `context_window` | The configure action installs and chains it automatically |
 
 The sidebar shows **percentage remaining** and the time until each quota reset,
 not quota token counts. The two Claude windows use compact `5h` and `7d`
@@ -195,10 +192,11 @@ for Claude, a `ttl≈...` estimate from the provider's 5-minute/1-hour bucket.
 This is local diagnostic math, not a server-confirmed expiry; the first session
 update reads the existing transcript once, then later updates read only
 appended bytes.
-Codex shows a short session preview from its local state database; its live
-context and cache fields are not queried because the current safe app-server
-connection is quota-only and does not attach to an active thread. Grok's
-current billing source has neither context nor cache fields. During a working
+Codex shows five-hour and weekly windows plus a short session preview from its
+local state database; its live context and cache fields are not queried because
+the current safe app-server connection is quota-only and does not attach to an
+active thread. Grok's current billing source has neither context nor cache
+fields. During a working
 turn, one short-lived global watcher polls once per configured interval,
 coalesces active fetches, and exits when all selected providers settle. The
 sidebar does not run a permanent daemon.
@@ -275,8 +273,8 @@ rows = [
   cache-expiry value. Herdr reports no more than sixteen metadata tokens; old
   `$quota_icon`/`$quota_status` fields are cleaned up during migration.
 
-Herdr 0.8 only accepts fixed hex colors for styled tokens, not semantic theme
-colors. The default palette uses soft, high-luminance green, amber, and red
+Herdr accepts fixed hex colors for styled tokens, not semantic theme colors.
+The default palette uses soft, high-luminance green, amber, and red
 tones to reduce eye strain on Herdr's dark sidebar while keeping each health
 state easy to scan.
 
@@ -284,7 +282,7 @@ Provider styling uses Herdr's static `rows_by_agent` projection, while quota
 health remains dynamic metadata. This keeps branding and health logic separate
 and avoids spending additional metadata-token capacity on static labels.
 
-Herdr plugin v1 accepts text tokens, not provider image components. For that
+The Herdr plugin API accepts text tokens, not provider image components. For that
 reason the default layout uses the readable provider name and keeps Herdr's
 native dot instead of adding low-recognition Unicode or SVG markers. The
 checked-in [`docs/icons/`](docs/icons/) assets are optional visual references;
@@ -299,12 +297,12 @@ such as `Thinking` or `Executing`. It does not show the working directory.
 
 - **Codex:** the local official [app-server JSON-RPC](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
   rate-limit response plus one bounded, state-database-only `thread/list` for
-  session previews. The plugin accepts the seven-day window by duration, rather
-  than assuming which field is primary. API-key authentication is intentionally
-  not mislabeled as a ChatGPT subscription quota. It does not resume threads or
-  read rollout JSONL, so it cannot claim a live context percentage. Only the
-  first non-empty line of at most 50 previews is retained, truncated to 80
-  characters.
+  session previews. The plugin maps the provider-reported five-hour and
+  seven-day windows by duration, rather than assuming which field is primary.
+  API-key authentication is intentionally not mislabeled as a ChatGPT
+  subscription quota. It does not resume threads or read rollout JSONL, so it
+  cannot claim a live context percentage. Only the first non-empty line of at
+  most 50 previews is retained, truncated to 80 characters.
 - **Grok:** the local `~/.grok/auth.json` login key is read in memory and sent
   to the weekly billing endpoint used by the Grok CLI. The response is accepted
   only when it identifies a weekly period. This is SuperGrok usage, not xAI
