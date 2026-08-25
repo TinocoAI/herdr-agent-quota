@@ -7,10 +7,17 @@ fn fixture(value: &str) -> Value {
 }
 
 #[test]
-fn codex_fixture_exposes_only_the_weekly_contract() {
+fn codex_fixture_exposes_the_five_hour_and_weekly_contracts() {
     let value = fixture(include_str!("fixtures/codex/rate-limits-weekly.json"));
     let snapshot = codex::parse_rate_limits(&value, 1).unwrap();
-    assert_eq!(snapshot.windows.len(), 1);
+    assert_eq!(snapshot.windows.len(), 2);
+    assert_eq!(
+        snapshot
+            .window(WindowKind::FiveHour)
+            .unwrap()
+            .remaining_percent,
+        80.0
+    );
     assert_eq!(
         snapshot
             .window(WindowKind::Weekly)
