@@ -150,13 +150,7 @@ fn summary(snapshot: &ProviderSnapshot, now_unix: u64, include_left: bool) -> St
 fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind, now_unix: u64) -> String {
     snapshot
         .window(kind)
-        .map(|window| {
-            if kind == WindowKind::Weekly && snapshot.window(WindowKind::FiveHour).is_none() {
-                format_window(window, now_unix, false)
-            } else {
-                format_compact_window(window, now_unix)
-            }
-        })
+        .map(|window| format_compact_window(window, now_unix))
         .unwrap_or_default()
 }
 
@@ -488,14 +482,14 @@ mod tests {
     }
 
     #[test]
-    fn weekly_only_sidebar_window_keeps_the_readable_reset_label() {
+    fn weekly_only_sidebar_window_uses_the_compact_reset_eta() {
         let snapshot = ProviderSnapshot::new(
             Provider::Codex,
             vec![window(WindowKind::Weekly, 31.0, 518_400)],
             0,
         );
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
-        assert_eq!(values.quota_week, "7d 69% reset 6d0h");
+        assert_eq!(values.quota_week, "7d 69% 6d0h");
     }
 
     #[test]
