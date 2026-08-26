@@ -1,7 +1,7 @@
 use crate::cache::CacheStore;
 use crate::herdr::{
-    current_agent_provider, list_agent_panes, list_agent_state, publish_tokens, refresh_pane_topic,
-    AgentPane,
+    current_agent_provider, list_agent_panes, list_agent_state, publish_pane_tokens,
+    refresh_pane_topic, AgentPane, PaneTokens,
 };
 use crate::model::{Provider, ProviderSnapshot};
 use crate::presentation::MetadataTokens;
@@ -106,7 +106,7 @@ fn refresh_and_publish(
     force: bool,
     panes: &[AgentPane],
 ) -> Result<()> {
-    refresh_selected(cache, providers, force)?;
+    refresh_selected(cache, providers, force, panes)?;
     publish(cache, providers, None, Some(panes))
 }
 
@@ -117,8 +117,13 @@ fn run_internal(
     topic_pane: Option<&str>,
 ) -> Result<()> {
     let cache = CacheStore::from_env()?;
-    let outcomes = refresh_selected(&cache, providers, force)?;
-    publish(&cache, providers, topic_pane, None)?;
+    // Agent inventory is metadata-only. Reusing it for both the fetch and the
+    // publish pass lets local Codex/Grok diagnostics target the exact pane
+    // sessions without adding another Herdr call or reading any pane output.
+    let panes = list_agent_panes().ok();
+    let session_panes = panes.as_deref().unwrap_or_default();
+    let outcomes = refresh_selected(&cache, providers, force, session_panes)?;
+    publish(&cache, providers, topic_pane, panes.as_deref())?;
     if json {
         println!("{}", serde_json::to_string_pretty(&outcomes)?);
     }
@@ -177,11 +182,12 @@ fn refresh_selected(
     cache: &CacheStore,
     providers: &[Provider],
     force: bool,
+    panes: &[AgentPane],
 ) -> Result<Vec<ProviderOutcome>> {
     providers
         .iter()
         .copied()
-        .map(|provider| refresh_provider(cache, provider, force))
+        .map(|provider| refresh_provider(cache, provider, force, panes))
         .collect()
 }
 
@@ -189,6 +195,7 @@ fn refresh_provider(
     cache: &CacheStore,
     provider: Provider,
     force: bool,
+    panes: &[AgentPane],
 ) -> Result<ProviderOutcome> {
     let now = CacheStore::now_unix();
     if should_skip_fetch(cache, provider, force, now)? {
@@ -208,21 +215,28 @@ fn refresh_provider(
         });
     };
 
+    let session_ids = panes
+        .iter()
+        .filter(|pane| pane.provider == provider)
+        .filter_map(|pane| pane.session_id.clone())
+        .collect::<Vec<_>>();
     let fetched = match provider {
-        Provider::Codex => codex::fetch().map(FetchedSnapshot::direct),
-        Provider::Grok => grok::fetch().map(FetchedSnapshot::direct),
+        Provider::Codex => codex::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
+        Provider::Grok => grok::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Claude | Provider::Agy => load_statusline_snapshot(cache, provider),
     };
     cache.mark_refresh(provider, now)?;
     match fetched {
         Ok(fetched) => {
             let FetchedSnapshot {
-                snapshot,
+                mut snapshot,
                 preserve_context,
                 session_id,
             } = fetched;
             if preserve_context {
                 cache.save_preserving_context_for_session(snapshot, session_id.as_deref())?;
+            } else if matches!(provider, Provider::Codex | Provider::Grok) {
+                cache.save_preserving_diagnostics_for_sessions(&mut snapshot, &session_ids)?;
             } else {
                 cache.save(&snapshot)?;
             }
@@ -310,6 +324,8 @@ fn load_statusline_snapshot(cache: &CacheStore, provider: Provider) -> Result<Fe
     let session_id = value
         .get("session_id")
         .or_else(|| value.get("sessionId"))
+        .or_else(|| value.get("conversation_id"))
+        .or_else(|| value.get("conversationId"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     Ok(FetchedSnapshot {
@@ -344,21 +360,29 @@ fn publish(
         let usable = snapshot
             .as_ref()
             .filter(|snapshot| snapshot.usable_for_account(account_id.as_deref(), mtime));
-        if let Some(snapshot) = usable {
-            for pane in panes.iter_mut().filter(|pane| pane.provider == *provider) {
+        for pane in panes.iter_mut().filter(|pane| pane.provider == *provider) {
+            if let Some(snapshot) = usable {
                 if let Some(session_id) = pane.session_id.as_deref() {
                     if let Some(summary) = snapshot.session_summaries.get(session_id) {
                         pane.session_summary = summary.clone();
                     }
                 }
             }
-        }
-        if let Some(values) = tokens_for_loaded_snapshot(*provider, snapshot.as_ref(), usable, now)
-        {
-            tokens.push((*provider, values));
+            if let Some(values) = tokens_for_loaded_snapshot(
+                *provider,
+                snapshot.as_ref(),
+                usable,
+                now,
+                pane.session_id.as_deref(),
+            ) {
+                tokens.push(PaneTokens {
+                    pane_id: pane.pane_id.clone(),
+                    values,
+                });
+            }
         }
     }
-    publish_tokens(&panes, &tokens, CacheStore::now_millis())
+    publish_pane_tokens(&panes, &tokens, CacheStore::now_millis())
 }
 
 fn event_json() -> Option<Value> {
@@ -421,8 +445,10 @@ fn find_pane_id(value: &Value) -> Option<&str> {
 fn tokens_for_provider(
     snapshot: Option<&crate::model::ProviderSnapshot>,
     now_unix: u64,
+    session_id: Option<&str>,
 ) -> Option<MetadataTokens> {
-    snapshot.map(|snapshot| MetadataTokens::from_snapshot(snapshot, now_unix))
+    snapshot
+        .map(|snapshot| MetadataTokens::from_snapshot_for_session(snapshot, now_unix, session_id))
 }
 
 fn tokens_for_loaded_snapshot(
@@ -430,9 +456,10 @@ fn tokens_for_loaded_snapshot(
     raw: Option<&ProviderSnapshot>,
     usable: Option<&ProviderSnapshot>,
     now_unix: u64,
+    session_id: Option<&str>,
 ) -> Option<MetadataTokens> {
     match (usable, raw) {
-        (Some(snapshot), _) => tokens_for_provider(Some(snapshot), now_unix),
+        (Some(snapshot), _) => tokens_for_provider(Some(snapshot), now_unix, session_id),
         (None, Some(_)) => Some(MetadataTokens::unavailable(
             provider,
             "signed-in account changed",
@@ -462,7 +489,7 @@ mod tests {
 
     #[test]
     fn missing_snapshot_does_not_overwrite_sidebar_with_unavailable() {
-        let values = tokens_for_provider(None, 1);
+        let values = tokens_for_provider(None, 1, None);
         assert!(values.is_none());
     }
 
@@ -474,7 +501,8 @@ mod tests {
             1,
         )
         .with_account_id(Some("old-account".to_string()));
-        let values = tokens_for_loaded_snapshot(Provider::Grok, Some(&snapshot), None, 1).unwrap();
+        let values =
+            tokens_for_loaded_snapshot(Provider::Grok, Some(&snapshot), None, 1, None).unwrap();
         assert_eq!(values.quota_summary, "unavailable");
         assert_eq!(
             values.quota_error.as_deref(),

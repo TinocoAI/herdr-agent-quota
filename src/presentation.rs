@@ -7,6 +7,8 @@ pub struct MetadataTokens {
     pub quota_state: String,
     pub quota_icon: String,
     pub quota_provider: String,
+    pub quota_model: String,
+    pub quota_provider_model: String,
     pub quota_status: String,
     pub quota_5h: String,
     pub quota_5h_severity: Option<Severity>,
@@ -21,28 +23,46 @@ pub struct MetadataTokens {
 
 impl MetadataTokens {
     pub fn from_snapshot(snapshot: &ProviderSnapshot, now_unix: u64) -> Self {
+        Self::from_snapshot_for_session(snapshot, now_unix, None)
+    }
+
+    pub fn from_snapshot_for_session(
+        snapshot: &ProviderSnapshot,
+        now_unix: u64,
+        session_id: Option<&str>,
+    ) -> Self {
+        let quota_provider = snapshot.provider.display_name().to_string();
+        let quota_model = snapshot
+            .model_for_session(session_id)
+            .unwrap_or_default()
+            .to_string();
         Self {
             quota_state: snapshot.severity(now_unix).symbol().to_string(),
             quota_icon: snapshot.provider.icon().to_string(),
-            quota_provider: snapshot.provider.display_name().to_string(),
+            quota_provider_model: provider_model_label(&quota_provider, &quota_model),
+            quota_provider,
+            quota_model,
             quota_status: snapshot.severity(now_unix).label().to_string(),
             quota_5h: sidebar_window(snapshot, WindowKind::FiveHour, now_unix),
             quota_5h_severity: window_severity(snapshot, WindowKind::FiveHour, now_unix),
             quota_week: sidebar_window(snapshot, WindowKind::Weekly, now_unix),
             quota_week_severity: window_severity(snapshot, WindowKind::Weekly, now_unix),
             quota_summary: sidebar_summary(snapshot, now_unix),
-            quota_context: sidebar_context(snapshot),
-            quota_cache: sidebar_cache(snapshot),
-            quota_cache_ttl: sidebar_cache_ttl(snapshot, now_unix),
-            quota_error: sidebar_cache_error(snapshot, now_unix),
+            quota_context: sidebar_context(snapshot.context_for_session(session_id)),
+            quota_cache: sidebar_cache(snapshot.context_for_session(session_id)),
+            quota_cache_ttl: sidebar_cache_ttl(snapshot.context_for_session(session_id), now_unix),
+            quota_error: sidebar_cache_error(snapshot.context_for_session(session_id), now_unix),
         }
     }
 
     pub fn unavailable(provider: Provider, reason: impl Into<String>) -> Self {
+        let quota_provider = provider.display_name().to_string();
         Self {
             quota_state: Severity::Unknown.symbol().to_string(),
             quota_icon: provider.icon().to_string(),
-            quota_provider: provider.display_name().to_string(),
+            quota_provider_model: quota_provider.clone(),
+            quota_provider,
+            quota_model: String::new(),
             quota_status: Severity::Unknown.label().to_string(),
             quota_5h: match provider {
                 Provider::Claude | Provider::Agy => "5h N/A".to_string(),
@@ -60,6 +80,14 @@ impl MetadataTokens {
             quota_cache_ttl: String::new(),
             quota_error: Some(reason.into().chars().take(80).collect()),
         }
+    }
+}
+
+fn provider_model_label(provider: &str, model: &str) -> String {
+    if model.is_empty() {
+        provider.to_string()
+    } else {
+        format!("{provider}/{model}")
     }
 }
 
@@ -103,31 +131,27 @@ fn sidebar_window(snapshot: &ProviderSnapshot, kind: WindowKind, now_unix: u64) 
         .unwrap_or_default()
 }
 
-fn sidebar_context(snapshot: &ProviderSnapshot) -> String {
-    let Some(context) = snapshot.context.as_ref() else {
+fn sidebar_context(context: Option<&crate::model::ContextUsage>) -> String {
+    let Some(context) = context else {
         return String::new();
     };
     format!("context {}%", format_percent(context.used_percent))
 }
 
-fn sidebar_cache(snapshot: &ProviderSnapshot) -> String {
-    let Some(totals) = snapshot
-        .context
-        .as_ref()
-        .and_then(|context| context.cache.as_ref())
-        .and_then(|cache| cache.session_totals.as_ref())
-    else {
+fn sidebar_cache(context: Option<&crate::model::ContextUsage>) -> String {
+    let Some(cache) = context.and_then(|context| context.cache.as_ref()) else {
         return String::new();
     };
-    format!("cache {:.1}%", totals.hit_percent)
+    let hit_percent = cache
+        .session_totals
+        .as_ref()
+        .map(|totals| totals.hit_percent)
+        .unwrap_or(cache.hit_percent);
+    format!("cache {:.1}%", hit_percent)
 }
 
-fn sidebar_cache_ttl(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
-    let Some(cache) = snapshot
-        .context
-        .as_ref()
-        .and_then(|context| context.cache.as_ref())
-    else {
+fn sidebar_cache_ttl(context: Option<&crate::model::ContextUsage>, now_unix: u64) -> String {
+    let Some(cache) = context.and_then(|context| context.cache.as_ref()) else {
         return String::new();
     };
     cache
@@ -137,10 +161,11 @@ fn sidebar_cache_ttl(snapshot: &ProviderSnapshot, now_unix: u64) -> String {
         .unwrap_or_default()
 }
 
-fn sidebar_cache_error(snapshot: &ProviderSnapshot, now_unix: u64) -> Option<String> {
-    snapshot
-        .context
-        .as_ref()
+fn sidebar_cache_error(
+    context: Option<&crate::model::ContextUsage>,
+    now_unix: u64,
+) -> Option<String> {
+    context
         .and_then(|context| context.cache.as_ref())
         .and_then(|cache| cache.remaining_ttl_seconds(now_unix))
         .filter(|remaining| *remaining == 0)
@@ -305,6 +330,48 @@ mod tests {
     }
 
     #[test]
+    fn metadata_uses_the_model_for_the_pane_session() {
+        let mut snapshot = ProviderSnapshot::new(
+            Provider::Claude,
+            vec![window(WindowKind::Weekly, 10.0, 183_600)],
+            0,
+        )
+        .with_model(Some("latest".to_string()));
+        snapshot
+            .session_models
+            .insert("session-1".to_string(), "Sonnet".to_string());
+
+        let session_one =
+            MetadataTokens::from_snapshot_for_session(&snapshot, 0, Some("session-1"));
+        assert_eq!(session_one.quota_model, "Sonnet");
+        assert_eq!(session_one.quota_provider_model, "Claude/Sonnet");
+
+        let session_two =
+            MetadataTokens::from_snapshot_for_session(&snapshot, 0, Some("session-2"));
+        assert_eq!(session_two.quota_model, "");
+        assert_eq!(session_two.quota_provider_model, "Claude");
+    }
+
+    #[test]
+    fn metadata_uses_context_and_cache_for_the_pane_session() {
+        let mut snapshot = ProviderSnapshot::new(Provider::Codex, vec![], 0);
+        snapshot.session_contexts.insert(
+            "session-1".to_string(),
+            crate::model::ContextUsage::new(43.2)
+                .unwrap()
+                .with_cache(crate::model::CacheUsage::from_token_counts(200, 800, 100)),
+        );
+        let values = MetadataTokens::from_snapshot_for_session(&snapshot, 0, Some("session-1"));
+        assert_eq!(values.quota_context, "context 43%");
+        assert_eq!(values.quota_cache, "cache 72.7%");
+        assert_eq!(
+            MetadataTokens::from_snapshot_for_session(&snapshot, 0, Some("session-2"))
+                .quota_context,
+            ""
+        );
+    }
+
+    #[test]
     fn metadata_formats_session_cache_hit_rate_and_approximate_ttl() {
         let cache = crate::model::CacheUsage::from_token_counts(100, 800, 100)
             .unwrap()
@@ -328,6 +395,30 @@ mod tests {
         assert_eq!(values.quota_cache, "cache 80.0%");
         assert_eq!(values.quota_cache_ttl, "ttl≈1h");
         assert_eq!(values.quota_error, None);
+    }
+
+    #[test]
+    fn metadata_formats_codex_cache_ttl_for_the_pane_session() {
+        let cache = crate::model::CacheUsage::from_token_counts(100, 800, 100)
+            .unwrap()
+            .with_ttl_estimate(60 * 60, 1_000)
+            .with_session_totals(
+                crate::model::CacheTotals::from_token_counts(100, 800, 100),
+                "codex-session",
+                0,
+            );
+        let mut snapshot = ProviderSnapshot::new(Provider::Codex, vec![], 1);
+        snapshot.session_contexts.insert(
+            "codex-session".to_string(),
+            crate::model::ContextUsage::new(23.5)
+                .unwrap()
+                .with_cache(Some(cache)),
+        );
+
+        let values =
+            MetadataTokens::from_snapshot_for_session(&snapshot, 1_000, Some("codex-session"));
+        assert_eq!(values.quota_cache, "cache 80.0%");
+        assert_eq!(values.quota_cache_ttl, "ttl≈1h");
     }
 
     #[test]

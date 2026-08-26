@@ -3,11 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 23] = [
+const QUOTA_ROW_MARKERS: [&str; 25] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
     "$quota_provider",
+    "$quota_model",
+    "$quota_provider_model",
     "$quota_status",
     "$quota_summary",
     "$quota_session",
@@ -36,9 +38,7 @@ const CONFIG_PRESENCE_FILE: &str = "herdr-config.original.present";
 const QUOTA_SAFE_COLOR: &str = "#84b084";
 const QUOTA_WARNING_COLOR: &str = "#cdaa65";
 const QUOTA_DANGER_COLOR: &str = "#ca6470";
-const CONTEXT_COLOR: &str = "#9b8fd8";
-const CACHE_COLOR: &str = "#6fb5b7";
-const CACHE_TTL_COLOR: &str = "#cdaa65";
+const DIAGNOSTIC_COLOR: &str = "#9aa7b8";
 const PROVIDER_STYLES: [(&str, Option<&str>); 4] = [
     ("claude", Some("#c47f6a")),
     ("codex", Some("#7998b7")),
@@ -183,7 +183,7 @@ pub fn add_quota_row(input: &str) -> Result<String> {
         .context("Herdr ui.sidebar.agents.rows must be an array")?;
     let mut updated_rows = Array::new();
     for row in rows.iter() {
-        let cleaned = normalize_official_row(strip_quota_tokens(row));
+        let cleaned = normalize_official_row(strip_quota_tokens(row, true));
         if !cleaned.is_empty() {
             updated_rows.push(Value::Array(cleaned));
         }
@@ -226,7 +226,7 @@ pub fn remove_quota_row(input: &str) -> Result<String> {
     if let Some(rows) = agents.get_mut("rows").and_then(Item::as_array_mut) {
         let mut retained = Array::new();
         for row in rows.iter() {
-            let cleaned = strip_quota_tokens(row);
+            let cleaned = strip_quota_tokens(row, false);
             if cleaned.len() == 1
                 && matches!(
                     cleaned.iter().next().and_then(Value::as_str),
@@ -320,13 +320,16 @@ fn ensure_table<'a>(document: &'a mut DocumentMut, path: &[&str]) -> Result<&'a 
         .context("Herdr config section is not a table")
 }
 
-fn strip_quota_tokens(row: &Value) -> Array {
+fn strip_quota_tokens(row: &Value, keep_provider_model: bool) -> Array {
     let mut cleaned = Array::new();
     if let Some(items) = row.as_array() {
         for item in items {
             let is_quota_token =
                 configured_token_name(item).is_some_and(|value| QUOTA_ROW_MARKERS.contains(&value));
-            if !is_quota_token {
+            if !is_quota_token
+                || (keep_provider_model
+                    && configured_token_name(item) == Some("$quota_provider_model"))
+            {
                 cleaned.push(item.clone());
             }
         }
@@ -358,7 +361,7 @@ fn add_provider_rows(agents: &mut Table, rows: &Array) -> Result<()> {
         if rows_by_agent.contains_key(provider) && !is_managed {
             continue;
         }
-        let mut value = Value::Array(provider_rows(rows, color));
+        let mut value = Value::Array(provider_rows(rows, color, provider));
         value
             .decor_mut()
             .set_suffix(format!(" # {PROVIDER_STYLE_MARKER}"));
@@ -367,23 +370,66 @@ fn add_provider_rows(agents: &mut Table, rows: &Array) -> Result<()> {
     Ok(())
 }
 
-fn provider_rows(rows: &Array, color: Option<&str>) -> Array {
+fn provider_rows(rows: &Array, color: Option<&str>, provider: &str) -> Array {
+    let weekly_only = provider == "grok";
+    let context_index = if weekly_only {
+        rows.iter()
+            .position(|row| row_contains_token(row, "$quota_context"))
+    } else {
+        None
+    };
+    let window_index = if weekly_only {
+        rows.iter().position(|row| {
+            row_contains_token(row, "$quota_5h_normal")
+                || row_contains_token(row, "$quota_week_normal")
+        })
+    } else {
+        None
+    };
+    let window_items = window_index
+        .and_then(|index| rows.get(index))
+        .and_then(Value::as_array);
     let mut themed = Array::new();
-    for row in rows.iter() {
+    for (index, row) in rows.iter().enumerate() {
+        if window_index == Some(index) && context_index != Some(index) {
+            continue;
+        }
         let Some(items) = row.as_array() else {
             continue;
         };
         let mut themed_row = Array::new();
-        for item in items {
-            if configured_token_name(item) == Some("$quota_provider") {
-                themed_row.push(styled_token("agent", color, Some(true), Some(false)));
-            } else {
-                themed_row.push(item.clone());
+        append_themed_provider_row(&mut themed_row, items, color);
+        if context_index == Some(index) {
+            if let Some(window_items) = window_items {
+                append_themed_provider_row(&mut themed_row, window_items, color);
             }
         }
         themed.push(Value::Array(themed_row));
     }
     themed
+}
+
+fn append_themed_provider_row(row: &mut Array, items: &Array, color: Option<&str>) {
+    for item in items {
+        if configured_token_name(item) == Some("$quota_provider_model") {
+            row.push(styled_token(
+                "$quota_provider_model",
+                color,
+                Some(true),
+                Some(false),
+            ));
+        } else {
+            row.push(item.clone());
+        }
+    }
+}
+
+fn row_contains_token(row: &Value, token: &str) -> bool {
+    row.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| configured_token_name(item) == Some(token))
+    })
 }
 
 fn remove_managed_provider_rows(agents: &mut Table) {
@@ -421,7 +467,12 @@ fn default_state_row() -> Array {
 
 fn normalize_official_row(row: Array) -> Array {
     let has_state_icon = row.iter().any(|item| item.as_str() == Some("state_icon"));
-    if !has_state_icon || row.iter().any(|item| item.as_str() == Some("agent")) {
+    if !has_state_icon
+        || row.iter().any(|item| {
+            item.as_str() == Some("agent")
+                || configured_token_name(item) == Some("$quota_provider_model")
+        })
+    {
         return row;
     }
     let mut normalized = Array::new();
@@ -465,6 +516,13 @@ fn append_quota_rows(rows: &mut Array) {
         let has_state_icon = items.iter().any(|item| item.as_str() == Some("state_icon"));
         let mut cleaned = Array::new();
         for item in items.iter() {
+            let token_name = configured_token_name(item);
+            if token_name.is_some_and(|token| {
+                QUOTA_ROW_MARKERS.contains(&token)
+                    && !(has_state_icon && token == "$quota_provider_model")
+            }) {
+                continue;
+            }
             match item.as_str() {
                 Some("terminal_title_stripped") | Some("$quota_topic") => {}
                 Some("agent") if !has_state_icon => {}
@@ -489,28 +547,37 @@ fn append_quota_rows(rows: &mut Array) {
 
     if let Some(index) = official_index {
         if let Some(row) = rows.get_mut(index).and_then(Value::as_array_mut) {
-            if !row
-                .iter()
-                .any(|item| matches!(item.as_str(), Some("agent") | Some("$quota_provider")))
-            {
-                row.push(styled_token(
-                    "$quota_provider",
+            let mut compacted = Array::new();
+            let mut has_provider_model = false;
+            for item in row.iter() {
+                if item.as_str() == Some("agent") {
+                    if !has_provider_model {
+                        compacted.push(styled_token(
+                            "$quota_provider_model",
+                            None,
+                            Some(true),
+                            Some(false),
+                        ));
+                        has_provider_model = true;
+                    }
+                } else if configured_token_name(item) == Some("$quota_provider_model") {
+                    if !has_provider_model {
+                        compacted.push(item.clone());
+                        has_provider_model = true;
+                    }
+                } else {
+                    compacted.push(item.clone());
+                }
+            }
+            if !has_provider_model {
+                compacted.push(styled_token(
+                    "$quota_provider_model",
                     None,
                     Some(true),
                     Some(false),
                 ));
             }
-            if !row
-                .iter()
-                .any(|item| configured_token_name(item) == Some("$quota_context"))
-            {
-                row.push(styled_token(
-                    "$quota_context",
-                    Some(CONTEXT_COLOR),
-                    Some(true),
-                    Some(false),
-                ));
-            }
+            *row = compacted;
         }
     }
 
@@ -523,15 +590,27 @@ fn append_quota_rows(rows: &mut Array) {
 
     append_cache_row(rows);
 
+    rows.push(Value::Array(styled_row(
+        "$quota_context",
+        Some(DIAGNOSTIC_COLOR),
+        Some(true),
+        Some(false),
+    )));
+
     append_window_row(rows);
 }
 
 fn append_cache_row(rows: &mut Array) {
     rows.push(Value::Array(Array::from_iter([
-        styled_token("$quota_cache", Some(CACHE_COLOR), Some(true), Some(false)),
+        styled_token(
+            "$quota_cache",
+            Some(DIAGNOSTIC_COLOR),
+            Some(true),
+            Some(false),
+        ),
         styled_token(
             "$quota_cache_ttl",
-            Some(CACHE_TTL_COLOR),
+            Some(DIAGNOSTIC_COLOR),
             Some(true),
             Some(false),
         ),
@@ -592,7 +671,7 @@ fn styled_token(token: &str, fg: Option<&str>, bold: Option<bool>, dim: Option<b
 
 fn print_diff_hint() {
     println!("  keep Herdr's official state icon and plane tab");
-    println!("  show the user prompt before one compact, severity-colored 5h/7d row");
+    println!("  show the user prompt, context, and one compact severity-colored 5h/7d row");
 }
 
 #[cfg(test)]

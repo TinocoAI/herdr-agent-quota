@@ -1,6 +1,6 @@
 use crate::cache::CacheStore;
 use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
-use crate::providers::statusline::parse_context;
+use crate::providers::statusline::{parse_context, parse_model};
 use crate::providers::ProviderError;
 use serde_json::Value;
 
@@ -35,14 +35,16 @@ pub fn parse_statusline(
         ));
     }
     Ok(
-        ProviderSnapshot::new(Provider::Agy, windows, fetched_at_unix).with_context(
-            parse_context(
-                value
-                    .get("context_window")
-                    .or_else(|| value.get("contextWindow")),
-            )
-            .unwrap_or(None),
-        ),
+        ProviderSnapshot::new(Provider::Agy, windows, fetched_at_unix)
+            .with_model(parse_model(value))
+            .with_context(
+                parse_context(
+                    value
+                        .get("context_window")
+                        .or_else(|| value.get("contextWindow")),
+                )
+                .unwrap_or(None),
+            ),
     )
 }
 
@@ -169,6 +171,16 @@ mod tests {
                 .hit_percent,
             75.0
         );
+    }
+
+    #[test]
+    fn parses_the_human_readable_active_model_name() {
+        let value = json!({
+            "model": {"id": "gemini-3.5-flash", "display_name": "Gemini Flash"},
+            "quota": {"gemini-weekly": {"remaining_fraction": 0.8}}
+        });
+        let snapshot = parse_statusline(&value, 1).unwrap();
+        assert_eq!(snapshot.model.as_deref(), Some("Gemini Flash"));
     }
 
     #[test]

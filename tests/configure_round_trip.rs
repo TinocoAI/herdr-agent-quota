@@ -100,14 +100,18 @@ fn run_claude_refresh(state: &Path, herdr: &Path) {
 }
 
 #[test]
-fn sidebar_configuration_is_idempotent_and_reversible() {
+fn sidebar_configuration_is_idempotent_and_removes_plugin_rows() {
     let original = "[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n";
+    let canonical_without_plugin = "[ui.sidebar.agents]\nrows = [[\"state_icon\"]]\n";
     let applied = add_quota_row(original).unwrap();
     assert!(applied.contains("key = \"prefix+shift+r\""));
     assert!(applied.contains("type = \"plugin_action\""));
     assert!(applied.contains("command = \"herdr-agent-quota.refresh\""));
     assert_eq!(add_quota_row(&applied).unwrap(), applied);
-    assert_eq!(remove_quota_row(&applied).unwrap(), original);
+    assert_eq!(
+        remove_quota_row(&applied).unwrap(),
+        canonical_without_plugin
+    );
 }
 
 #[test]
@@ -125,7 +129,10 @@ fn sidebar_configuration_preserves_a_conflicting_refresh_key() {
     assert_eq!(applied.matches("key = \"prefix+shift+r\"").count(), 1);
     assert!(applied.contains("command = \"echo user-owned\""));
     assert!(!applied.contains("command = \"herdr-agent-quota.refresh\""));
-    assert_eq!(remove_quota_row(&applied).unwrap(), original);
+    assert_eq!(
+        remove_quota_row(&applied).unwrap(),
+        "[[keys.command]]\nkey = \"prefix+shift+r\"\ntype = \"shell\"\ncommand = \"echo user-owned\"\ndescription = \"user refresh\"\n\n[ui.sidebar.agents]\nrows = [[\"state_icon\"]]\n"
+    );
 }
 
 #[test]
@@ -135,7 +142,7 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
         "rows = [[\"state_icon\", \"workspace\", \"tab\"], [\"agent\"]]\n"
     );
     let applied = add_quota_row(original).unwrap();
-    assert!(applied.contains("$quota_provider"));
+    assert!(applied.contains("$quota_provider_model"));
     assert!(applied.contains("bold = true"));
     assert!(applied.contains("$quota_5h_normal"));
     assert!(applied.contains("$quota_5h_warning"));
@@ -146,11 +153,12 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
     assert!(!applied.contains("[\"$quota_summary\"]"));
     assert!(applied.contains("$quota_topic"));
     assert!(applied.contains("$quota_context"));
-    assert!(applied.contains("fg = \"#9b8fd8\""));
-    assert!(applied.find("$quota_provider").unwrap() < applied.find("$quota_context").unwrap());
+    assert!(applied.contains("$quota_provider_model"));
+    assert!(applied.contains("fg = \"#9aa7b8\""));
+    assert!(applied.find("$quota_provider_model").unwrap() < applied.find("$quota_topic").unwrap());
     assert!(applied.contains("$quota_cache"));
     assert!(applied.contains("$quota_cache_ttl"));
-    assert!(applied.contains("fg = \"#6fb5b7\""));
+    assert!(applied.contains("fg = \"#9aa7b8\""));
     assert!(applied.contains("row_gap = 1 # herdr-agent-quota"));
     assert!(applied.find("$quota_topic").unwrap() < applied.find("$quota_5h_normal").unwrap());
     assert!(applied.contains("fg = \"#84b084\""));
@@ -161,6 +169,128 @@ fn default_herdr_rows_become_plane_provider_usage_and_topic_lines() {
     assert!(applied.contains("fg = \"#7998b7\""));
     assert!(applied.contains("fg = \"#acb4c3\""));
     assert!(applied.contains("fg = \"#84b0af\""));
+}
+
+#[test]
+fn context_is_the_penultimate_row_and_model_shares_provider_style() {
+    let applied =
+        add_quota_row("[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n").unwrap();
+    let document = applied.parse::<toml_edit::DocumentMut>().unwrap();
+    let agents = &document["ui"]["sidebar"]["agents"];
+    let rows = agents["rows"].as_array().unwrap();
+    let context_index = rows
+        .iter()
+        .position(|row| {
+            row.as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.as_inline_table()
+                        .and_then(|table| table.get("token"))
+                        .and_then(toml_edit::Value::as_str)
+                        .is_some_and(|token| token == "$quota_context")
+                })
+            })
+        })
+        .unwrap();
+    let limit_index = rows
+        .iter()
+        .position(|row| {
+            row.as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.as_inline_table()
+                        .and_then(|table| table.get("token"))
+                        .and_then(toml_edit::Value::as_str)
+                        .is_some_and(|token| token == "$quota_5h_normal")
+                })
+            })
+        })
+        .unwrap();
+    assert_eq!(context_index + 1, limit_index);
+    assert_eq!(limit_index + 1, rows.len());
+
+    let claude_rows = agents["rows_by_agent"]["claude"].as_value().unwrap();
+    let rendered = claude_rows.to_string();
+    assert_eq!(rendered.matches("fg = \"#c47f6a\"").count(), 1);
+}
+
+#[test]
+fn provider_model_is_compact_and_grok_merges_weekly_limit_into_context_row() {
+    let applied =
+        add_quota_row("[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n").unwrap();
+    let document = applied.parse::<toml_edit::DocumentMut>().unwrap();
+    let agents = &document["ui"]["sidebar"]["agents"];
+    let rows = agents["rows"].as_array().unwrap();
+    let identity_row = rows
+        .iter()
+        .find(|row| row_contains_token(row, "$quota_provider_model"))
+        .unwrap();
+    let identity_tokens = identity_row.as_array().unwrap();
+    assert!(!identity_tokens.iter().any(|item| {
+        matches!(
+            configured_token(item),
+            Some("$quota_provider") | Some("$quota_model")
+        )
+    }));
+
+    let grok_rows = agents["rows_by_agent"]["grok"].as_array().unwrap();
+    let context_row = grok_rows
+        .iter()
+        .find(|row| row_contains_token(row, "$quota_context"))
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert!(context_row
+        .iter()
+        .any(|item| configured_token(item) == Some("$quota_week_normal")));
+    assert!(!grok_rows.iter().any(|row| {
+        row_contains_token(row, "$quota_week_normal") && !row_contains_token(row, "$quota_context")
+    }));
+}
+
+#[test]
+fn existing_provider_and_model_tokens_are_migrated_to_one_identity_token() {
+    let applied = add_quota_row(
+        r#"[ui.sidebar.agents]
+rows = [["state_icon", "tab", { token = "$quota_provider" }, { token = "$quota_model" }]]
+"#,
+    )
+    .unwrap();
+    let document = applied.parse::<toml_edit::DocumentMut>().unwrap();
+    let rows = document["ui"]["sidebar"]["agents"]["rows"]
+        .as_array()
+        .unwrap();
+    let identity_row = rows
+        .iter()
+        .find(|row| row_contains_token(row, "$quota_provider_model"))
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        identity_row
+            .iter()
+            .filter(|item| configured_token(item) == Some("$quota_provider_model"))
+            .count(),
+        1
+    );
+    assert!(!identity_row.iter().any(|item| {
+        matches!(
+            configured_token(item),
+            Some("$quota_provider") | Some("$quota_model")
+        )
+    }));
+}
+
+fn configured_token(value: &toml_edit::Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.as_inline_table()?.get("token")?.as_str())
+}
+
+fn row_contains_token(row: &toml_edit::Value, token: &str) -> bool {
+    row.as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| configured_token(item) == Some(token))
+    })
 }
 
 #[test]
@@ -184,7 +314,10 @@ fn sidebar_configuration_preserves_an_explicit_row_gap() {
     let applied = add_quota_row(original).unwrap();
     assert!(applied.contains("row_gap = 2"));
     assert!(!applied.contains("row_gap = 1"));
-    assert_eq!(remove_quota_row(&applied).unwrap(), original);
+    assert_eq!(
+        remove_quota_row(&applied).unwrap(),
+        "[ui.sidebar.agents]\nrow_gap = 2\nrows = [[\"state_icon\"]]\n"
+    );
 }
 
 #[test]
@@ -464,7 +597,7 @@ fn claude_collector_does_not_republish_unchanged_quota() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(
         state.path(),
-        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","tokens":{"quota_state":"?","quota_provider":"Claude","quota_5h":"5h 42%","quota_5h_warning":"5h 42%","quota_week":"7d 73%","quota_week_warning":"7d 73%","quota_summary":"5h 42% · week 73%"}}]}}"#,
+        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","tokens":{"quota_state":"?","quota_provider":"Claude","quota_provider_model":"Claude","quota_5h":"5h 42%","quota_5h_warning":"5h 42%","quota_week":"7d 73%","quota_week_warning":"7d 73%","quota_summary":"5h 42% · week 73%"}}]}}"#,
     );
 
     let input = br#"{

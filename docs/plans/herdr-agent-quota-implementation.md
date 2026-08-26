@@ -101,6 +101,8 @@ longer sent as a separate metadata value:
 - `$quota_icon`: retired cleanup marker; native Herdr state plus provider name
   replaces this redundant value.
 - `$quota_provider`: `Codex`, `Grok`, `Claude`, or `Agy` for custom layouts.
+- `$quota_provider_model`: compact `Provider/Model` identity label used by the
+  default row; it falls back to provider-only when the session model is absent.
 - `$quota_status`: retired cleanup marker; quota window rows carry the visible
   health color.
 - `$quota_context`: provider-reported context-used percentage when available.
@@ -361,9 +363,10 @@ requests on the user's behalf.
 3. Back up the original once with a deterministic adjacent name.
 4. Retain Herdr's official `state_icon`/`tab` row (without the directory),
    add the plugin-owned `$quota_topic` as its own row, add
-   `$quota_provider` to the plane row, and add one compact row containing the
+   `$quota_provider_model` to the plane row, and add one compact row containing the
    styled `$quota_5h` and `$quota_week` variants. Herdr elides missing tokens
-   and their separators for weekly-only agents.
+   and their separators for weekly-only agents. The Grok provider projection
+   joins its weekly limit to the context row because it has no five-hour value.
    The topic token is extracted from the latest user prompt on event refresh;
    it stays empty instead of falling back to AI status titles. This keeps every
    agent to three readable lines and shows the provider name only once. The

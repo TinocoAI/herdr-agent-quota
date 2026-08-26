@@ -7,6 +7,25 @@ use std::path::Path;
 
 const TRANSCRIPT_TAIL_BYTES: u64 = 16 * 1024;
 
+/// Read the provider's human-readable active model label from a statusLine
+/// payload. The display name is intentionally preferred over the model id so
+/// the sidebar stays useful at a glance and does not expose provider-specific
+/// implementation identifiers.
+pub fn parse_model(value: &Value) -> Option<String> {
+    value
+        .get("model")
+        .and_then(Value::as_object)
+        .and_then(|model| {
+            model
+                .get("display_name")
+                .or_else(|| model.get("displayName"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
 pub fn parse_context(
     value: Option<&Value>,
 ) -> std::result::Result<Option<ContextUsage>, ProviderError> {
@@ -115,6 +134,8 @@ pub fn enrich_cache_session(
     let Some(session_id) = statusline
         .get("session_id")
         .or_else(|| statusline.get("sessionId"))
+        .or_else(|| statusline.get("conversation_id"))
+        .or_else(|| statusline.get("conversationId"))
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
     else {
@@ -343,6 +364,20 @@ mod tests {
                 .unwrap()
                 .with_cache(CacheUsage::from_token_counts(1, 1, 1)),
         ))
+    }
+
+    #[test]
+    fn model_parser_requires_a_human_readable_display_name() {
+        assert_eq!(
+            parse_model(&json!({"model": {"id": "claude-sonnet-4"}})),
+            None
+        );
+        assert_eq!(
+            parse_model(&json!({
+                "model": {"displayName": "Sonnet"}
+            })),
+            Some("Sonnet".to_string())
+        );
     }
 
     #[test]

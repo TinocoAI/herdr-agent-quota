@@ -12,6 +12,7 @@ pub const MIN_WATCH_INTERVAL_SECONDS: u64 = 30;
 pub const MAX_WATCH_INTERVAL_SECONDS: u64 = 60 * 60;
 const WATCH_INTERVAL_ENV: &str = "HERDR_AGENT_QUOTA_WATCH_INTERVAL_SECONDS";
 const WATCH_INTERVAL_FILE: &str = "watch-interval-seconds";
+const MAX_STATUSLINE_SESSIONS: usize = 128;
 
 #[derive(Debug, Clone)]
 pub struct CacheStore {
@@ -72,6 +73,67 @@ impl CacheStore {
         Self::atomic_replace(&destination, &temporary, bytes)
     }
 
+    /// Keep provider-local diagnostics when a successful quota refresh cannot
+    /// read one of the session files for a moment. Quota windows are still
+    /// replaced immediately; diagnostics are merged only for the same signed
+    /// in account so a login switch can never inherit another user's data.
+    pub fn save_preserving_diagnostics(&self, mut snapshot: ProviderSnapshot) -> Result<()> {
+        self.save_preserving_diagnostics_for_sessions(&mut snapshot, &[])
+    }
+
+    /// Variant used by the refresh path, which knows the session ids currently
+    /// visible in Herdr. It preserves only those ids, keeping a bounded local
+    /// snapshot instead of growing it forever as old sessions age out.
+    pub fn save_preserving_diagnostics_for_sessions(
+        &self,
+        snapshot: &mut ProviderSnapshot,
+        session_ids: &[String],
+    ) -> Result<()> {
+        if let Some(previous) = self.load(snapshot.provider).ok().flatten() {
+            let same_account = snapshot.account_id == previous.account_id;
+            if same_account {
+                if snapshot.context.is_none() {
+                    snapshot.context = previous.context.clone();
+                }
+                if snapshot.model.is_none() {
+                    snapshot.model = previous.model.clone();
+                }
+                if session_ids.is_empty() {
+                    if snapshot.session_contexts.is_empty() {
+                        for (session_id, context) in previous.session_contexts {
+                            snapshot
+                                .session_contexts
+                                .entry(session_id)
+                                .or_insert(context);
+                        }
+                    }
+                    if snapshot.session_models.is_empty() {
+                        for (session_id, model) in previous.session_models {
+                            snapshot.session_models.entry(session_id).or_insert(model);
+                        }
+                    }
+                } else {
+                    for session_id in session_ids {
+                        if let Some(context) = previous.session_contexts.get(session_id) {
+                            snapshot
+                                .session_contexts
+                                .entry(session_id.clone())
+                                .or_insert_with(|| context.clone());
+                        }
+                        if let Some(model) = previous.session_models.get(session_id) {
+                            snapshot
+                                .session_models
+                                .entry(session_id.clone())
+                                .or_insert_with(|| model.clone());
+                        }
+                    }
+                }
+            }
+        }
+        prune_session_diagnostics(snapshot, session_ids);
+        self.save(snapshot)
+    }
+
     /// Store the latest statusLine observation without coordinating with a
     /// refresh. The statusLine hook is a latency-sensitive producer; its only
     /// shared-state operation is an atomic last-observation replacement.
@@ -82,10 +144,7 @@ impl CacheStore {
         observation: &Value,
     ) -> Result<()> {
         self.ensure()?;
-        let session_id = observation
-            .get("session_id")
-            .or_else(|| observation.get("sessionId"))
-            .and_then(Value::as_str);
+        let session_id = statusline_session_id(observation);
         if let Some(session_id) = session_id {
             if let Some(cache) = snapshot
                 .context
@@ -95,12 +154,42 @@ impl CacheStore {
                 cache.session_id = Some(session_id.to_string());
             }
         }
-        let previous = self
-            .load_statusline_observation(provider)
-            .ok()
-            .flatten()
-            .and_then(|observation| observation.snapshot.context);
-        merge_preserved_context(&mut snapshot, previous, session_id);
+        let previous = self.load_statusline_observation(provider).ok().flatten();
+        let previous_snapshot = previous.as_ref().map(|observation| &observation.snapshot);
+        let previous_session_id = previous
+            .as_ref()
+            .and_then(|observation| statusline_session_id(&observation.payload));
+        merge_preserved_context(
+            &mut snapshot,
+            previous_snapshot.and_then(|snapshot| snapshot.context.clone()),
+            previous_session_id,
+            session_id,
+        );
+        merge_session_models(
+            &mut snapshot,
+            previous_snapshot,
+            previous_session_id,
+            session_id,
+        );
+        if let Some(previous_snapshot) = previous_snapshot {
+            for (session_id, context) in &previous_snapshot.session_contexts {
+                snapshot
+                    .session_contexts
+                    .entry(session_id.clone())
+                    .or_insert_with(|| context.clone());
+            }
+        }
+        if let Some(session_id) = session_id {
+            if let Some(context) = snapshot.context.clone() {
+                snapshot
+                    .session_contexts
+                    .insert(session_id.to_string(), context);
+            }
+        }
+        let current_session_ids = session_id
+            .map(|session_id| vec![session_id.to_string()])
+            .unwrap_or_default();
+        prune_session_diagnostics(&mut snapshot, &current_session_ids);
         let saved = StatuslineObservation {
             snapshot,
             payload: observation.clone(),
@@ -155,12 +244,45 @@ impl CacheStore {
         }
         // A malformed/temporarily unreadable old snapshot must not prevent a
         // fresh statusLine value from replacing it.
-        let previous = self
-            .load(snapshot.provider)
-            .ok()
-            .flatten()
-            .and_then(|snapshot| snapshot.context);
-        merge_preserved_context(&mut snapshot, previous, session_id);
+        let previous = self.load(snapshot.provider).ok().flatten();
+        let previous_session_id = previous
+            .as_ref()
+            .and_then(|snapshot| snapshot.context.as_ref())
+            .and_then(|context| context.cache.as_ref())
+            .and_then(|cache| cache.session_id.as_deref());
+        merge_preserved_context(
+            &mut snapshot,
+            previous
+                .as_ref()
+                .and_then(|snapshot| snapshot.context.clone()),
+            previous_session_id,
+            session_id,
+        );
+        merge_session_models(
+            &mut snapshot,
+            previous.as_ref(),
+            previous_session_id,
+            session_id,
+        );
+        if let Some(previous) = previous.as_ref() {
+            for (session_id, context) in &previous.session_contexts {
+                snapshot
+                    .session_contexts
+                    .entry(session_id.clone())
+                    .or_insert_with(|| context.clone());
+            }
+        }
+        if let Some(session_id) = session_id {
+            if let Some(context) = snapshot.context.clone() {
+                snapshot
+                    .session_contexts
+                    .insert(session_id.to_string(), context);
+            }
+        }
+        let current_session_ids = session_id
+            .map(|session_id| vec![session_id.to_string()])
+            .unwrap_or_default();
+        prune_session_diagnostics(&mut snapshot, &current_session_ids);
         self.save(&snapshot)
     }
 
@@ -354,51 +476,98 @@ impl CacheStore {
     }
 }
 
-fn strip_session_cache_state(cache: &mut crate::model::CacheUsage, clear_ttl: bool) {
-    cache.session_totals = None;
-    cache.session_id = None;
-    cache.transcript_offset = 0;
-    if clear_ttl {
-        cache.ttl_seconds = None;
-        cache.last_activity_unix = None;
+fn merge_session_models(
+    snapshot: &mut ProviderSnapshot,
+    previous: Option<&ProviderSnapshot>,
+    previous_session_id: Option<&str>,
+    session_id: Option<&str>,
+) {
+    if let Some(previous) = previous {
+        for (session_id, model) in &previous.session_models {
+            snapshot
+                .session_models
+                .entry(session_id.clone())
+                .or_insert_with(|| model.clone());
+        }
     }
+    let Some(session_id) = session_id else {
+        return;
+    };
+    if let Some(model) = snapshot.model.as_ref() {
+        snapshot
+            .session_models
+            .insert(session_id.to_string(), model.clone());
+    } else if previous_session_id == Some(session_id) {
+        if let Some(model) = previous.and_then(|previous| previous.model.as_ref()) {
+            snapshot
+                .session_models
+                .entry(session_id.to_string())
+                .or_insert_with(|| model.clone());
+        }
+    }
+}
+
+fn prune_session_diagnostics(snapshot: &mut ProviderSnapshot, current_session_ids: &[String]) {
+    while snapshot.session_models.len() > MAX_STATUSLINE_SESSIONS {
+        let Some(session_id) = snapshot
+            .session_models
+            .keys()
+            .find(|session_id| {
+                !current_session_ids
+                    .iter()
+                    .any(|current| current == *session_id)
+            })
+            .cloned()
+            .or_else(|| snapshot.session_models.keys().next().cloned())
+        else {
+            break;
+        };
+        snapshot.session_models.remove(&session_id);
+    }
+    while snapshot.session_contexts.len() > MAX_STATUSLINE_SESSIONS {
+        let Some(session_id) = snapshot
+            .session_contexts
+            .keys()
+            .find(|session_id| {
+                !current_session_ids
+                    .iter()
+                    .any(|current| current == *session_id)
+            })
+            .cloned()
+            .or_else(|| snapshot.session_contexts.keys().next().cloned())
+        else {
+            break;
+        };
+        snapshot.session_contexts.remove(&session_id);
+    }
+}
+
+fn statusline_session_id(observation: &Value) -> Option<&str> {
+    observation
+        .get("session_id")
+        .or_else(|| observation.get("sessionId"))
+        .or_else(|| observation.get("conversation_id"))
+        .or_else(|| observation.get("conversationId"))
+        .and_then(Value::as_str)
 }
 
 fn merge_preserved_context(
     snapshot: &mut ProviderSnapshot,
     previous: Option<ContextUsage>,
+    previous_session_id: Option<&str>,
     session_id: Option<&str>,
 ) {
     let Some(previous_context) = previous else {
         return;
     };
+    let same_session = sessions_match(previous_session_id, session_id);
     match (&mut snapshot.context, previous_context) {
-        (None, mut previous_context) => {
-            if let Some(cache) = previous_context.cache.as_mut() {
-                let same_session = session_id
-                    .is_some_and(|session_id| cache.session_id.as_deref() == Some(session_id));
-                if !same_session {
-                    let clear_ttl = cache.session_id.is_some() || session_id.is_some();
-                    strip_session_cache_state(cache, clear_ttl);
-                }
-            }
+        (None, previous_context) if same_session => {
             snapshot.context = Some(previous_context);
         }
-        (Some(current), previous_context) if current.cache.is_none() => {
-            let mut previous_cache = previous_context.cache.clone();
-            let same_session = session_id.is_some_and(|session_id| {
-                previous_cache
-                    .as_ref()
-                    .and_then(|cache| cache.session_id.as_deref())
-                    == Some(session_id)
-            });
-            if !same_session {
-                if let Some(cache) = previous_cache.as_mut() {
-                    let clear_ttl = cache.session_id.is_some() || session_id.is_some();
-                    strip_session_cache_state(cache, clear_ttl);
-                }
-            }
-            current.cache = previous_cache;
+        (None, _) => {}
+        (Some(current), previous_context) if current.cache.is_none() && same_session => {
+            current.cache = previous_context.cache;
         }
         (Some(current), previous_context) => {
             let Some(current_cache) = current.cache.as_mut() else {
@@ -407,11 +576,6 @@ fn merge_preserved_context(
             let Some(previous_cache) = previous_context.cache.as_ref() else {
                 return;
             };
-            let same_session = current_cache.session_id.is_some()
-                && current_cache.session_id == previous_cache.session_id
-                && session_id.is_none_or(|session_id| {
-                    current_cache.session_id.as_deref() == Some(session_id)
-                });
             if same_session {
                 if current_cache.session_totals.is_none() {
                     current_cache.session_totals = previous_cache.session_totals.clone();
@@ -427,6 +591,14 @@ fn merge_preserved_context(
                 }
             }
         }
+    }
+}
+
+fn sessions_match(previous_session_id: Option<&str>, session_id: Option<&str>) -> bool {
+    match (previous_session_id, session_id) {
+        (Some(previous), Some(current)) => previous == current,
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -489,6 +661,43 @@ mod tests {
     }
 
     #[test]
+    fn statusline_observations_keep_models_for_multiple_sessions() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        cache
+            .save_statusline_observation(
+                Provider::Claude,
+                ProviderSnapshot::new(Provider::Claude, vec![], 1)
+                    .with_model(Some("Sonnet".to_string())),
+                &json!({"session_id": "session-1"}),
+            )
+            .unwrap();
+        cache
+            .save_statusline_observation(
+                Provider::Claude,
+                ProviderSnapshot::new(Provider::Claude, vec![], 2)
+                    .with_model(Some("Opus".to_string())),
+                &json!({"conversation_id": "session-2"}),
+            )
+            .unwrap();
+        cache
+            .save_statusline_observation(
+                Provider::Claude,
+                ProviderSnapshot::new(Provider::Claude, vec![], 3),
+                &json!({"session_id": "session-2"}),
+            )
+            .unwrap();
+
+        let saved = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        assert_eq!(saved.session_models["session-1"], "Sonnet");
+        assert_eq!(saved.session_models["session-2"], "Opus");
+    }
+
+    #[test]
     fn statusline_refresh_preserves_previous_cache_diagnostics_when_current_usage_is_missing() {
         let directory = tempdir().unwrap();
         let cache = CacheStore::new(directory.path());
@@ -511,6 +720,91 @@ mod tests {
             .unwrap();
         assert_eq!(saved_context.used_percent, 24.0);
         assert_eq!(saved_context.cache, context.cache);
+    }
+
+    #[test]
+    fn statusline_refresh_records_context_for_the_current_session() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let current = snapshot().with_context(Some(ContextUsage::new(12.0).unwrap()));
+        cache
+            .save_preserving_context_for_session(current, Some("session-1"))
+            .unwrap();
+        let saved = cache.load(Provider::Grok).unwrap().unwrap();
+        assert_eq!(
+            saved
+                .context_for_session(Some("session-1"))
+                .map(|context| context.used_percent),
+            Some(12.0)
+        );
+        assert!(saved.session_contexts.contains_key("session-1"));
+    }
+
+    #[test]
+    fn statusline_refresh_preserves_model_for_the_same_session() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let previous = snapshot()
+            .with_model(Some("Sonnet".to_string()))
+            .with_context(Some(
+                ContextUsage::new(10.0).unwrap().with_cache(Some(
+                    CacheUsage::from_token_counts(1, 1, 0)
+                        .unwrap()
+                        .with_session_totals(None, "session-1", 0),
+                )),
+            ));
+        cache.save(&previous).unwrap();
+
+        let current = snapshot().with_context(Some(ContextUsage::new(12.0).unwrap()));
+        cache
+            .save_preserving_context_for_session(current, Some("session-1"))
+            .unwrap();
+        let saved = cache.load(Provider::Grok).unwrap().unwrap();
+        assert_eq!(saved.session_models["session-1"], "Sonnet");
+    }
+
+    #[test]
+    fn direct_provider_refresh_preserves_missing_local_session_diagnostics() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let mut previous = snapshot().with_account_id(Some("account-1".to_string()));
+        previous.model = Some("grok-4.6".to_string());
+        previous
+            .session_models
+            .insert("session-1".to_string(), "grok-4.6".to_string());
+        previous
+            .session_contexts
+            .insert("session-1".to_string(), ContextUsage::new(24.0).unwrap());
+        cache.save(&previous).unwrap();
+
+        let latest = snapshot().with_account_id(Some("account-1".to_string()));
+        cache.save_preserving_diagnostics(latest).unwrap();
+        let saved = cache.load(Provider::Grok).unwrap().unwrap();
+        assert_eq!(saved.model.as_deref(), Some("grok-4.6"));
+        assert_eq!(saved.session_models["session-1"], "grok-4.6");
+        assert!(saved.session_contexts.contains_key("session-1"));
+    }
+
+    #[test]
+    fn direct_provider_diagnostics_remain_bounded() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let mut previous = snapshot();
+        for index in 0..(MAX_STATUSLINE_SESSIONS + 8) {
+            let session_id = format!("session-{index}");
+            previous
+                .session_models
+                .insert(session_id.clone(), format!("model-{index}"));
+            previous
+                .session_contexts
+                .insert(session_id, ContextUsage::new((index % 100) as f64).unwrap());
+        }
+        cache.save(&previous).unwrap();
+
+        cache.save_preserving_diagnostics(snapshot()).unwrap();
+        let saved = cache.load(Provider::Grok).unwrap().unwrap();
+        assert_eq!(saved.session_models.len(), MAX_STATUSLINE_SESSIONS);
+        assert_eq!(saved.session_contexts.len(), MAX_STATUSLINE_SESSIONS);
     }
 
     #[test]
@@ -574,6 +868,81 @@ mod tests {
     }
 
     #[test]
+    fn statusline_new_session_does_not_inherit_previous_cache_diagnostics() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let previous = ProviderSnapshot::new(Provider::Claude, vec![], 1).with_context(Some(
+            ContextUsage::new(23.5).unwrap().with_cache(Some(
+                CacheUsage::from_token_counts(10, 90, 0)
+                    .unwrap()
+                    .with_session_totals(
+                        crate::model::CacheTotals::from_token_counts(10, 90, 0),
+                        "session-1",
+                        512,
+                    ),
+            )),
+        ));
+        cache
+            .save_statusline_observation(
+                Provider::Claude,
+                previous,
+                &json!({"session_id": "session-1"}),
+            )
+            .unwrap();
+
+        let latest = ProviderSnapshot::new(Provider::Claude, vec![], 2)
+            .with_context(Some(ContextUsage::new(0.0).unwrap()));
+        cache
+            .save_statusline_observation(
+                Provider::Claude,
+                latest,
+                &json!({"session_id": "session-2"}),
+            )
+            .unwrap();
+
+        let saved = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        assert!(saved
+            .context_for_session(Some("session-2"))
+            .unwrap()
+            .cache
+            .is_none());
+        assert!(saved.session_contexts.contains_key("session-2"));
+    }
+
+    #[test]
+    fn statusline_session_diagnostics_remain_bounded() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        for index in 0..(MAX_STATUSLINE_SESSIONS + 8) {
+            let session_id = format!("session-{index}");
+            cache
+                .save_statusline_observation(
+                    Provider::Claude,
+                    ProviderSnapshot::new(Provider::Claude, vec![], index as u64)
+                        .with_model(Some(format!("model-{index}")))
+                        .with_context(Some(ContextUsage::new(0.0).unwrap())),
+                    &json!({"session_id": session_id}),
+                )
+                .unwrap();
+        }
+
+        let saved = cache
+            .load_statusline_observation(Provider::Claude)
+            .unwrap()
+            .unwrap()
+            .snapshot;
+        assert_eq!(saved.session_models.len(), MAX_STATUSLINE_SESSIONS);
+        assert_eq!(saved.session_contexts.len(), MAX_STATUSLINE_SESSIONS);
+        assert!(saved
+            .session_models
+            .contains_key(&format!("session-{}", MAX_STATUSLINE_SESSIONS + 7)));
+    }
+
+    #[test]
     fn missing_cache_is_not_an_error() {
         let directory = tempdir().unwrap();
         let cache = CacheStore::new(directory.path());
@@ -621,14 +990,11 @@ mod tests {
     fn watcher_stop_marker_is_reversible_for_reinstall() {
         let directory = tempdir().unwrap();
         let cache = CacheStore::new(directory.path());
+        let started_millis = CacheStore::now_millis();
         cache.stop_turn_watchers().unwrap();
-        assert!(cache
-            .turn_watchers_stopped_after(CacheStore::now_millis().saturating_sub(1))
-            .unwrap());
+        assert!(cache.turn_watchers_stopped_after(started_millis).unwrap());
         cache.clear_turn_watcher_stop().unwrap();
-        assert!(!cache
-            .turn_watchers_stopped_after(CacheStore::now_millis().saturating_sub(1))
-            .unwrap());
+        assert!(!cache.turn_watchers_stopped_after(started_millis).unwrap());
     }
 
     #[test]

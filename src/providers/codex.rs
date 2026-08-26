@@ -1,11 +1,14 @@
 use crate::cache::CacheStore;
-use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
+use crate::model::{
+    CacheTotals, CacheUsage, ContextUsage, Provider, ProviderSnapshot, ResetAt, UsageWindow,
+    WindowKind,
+};
 use crate::providers::ProviderError;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -18,6 +21,14 @@ use std::os::unix::process::CommandExt;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const FIVE_HOUR_WINDOW_MINUTES: u64 = 5 * 60;
 const WEEKLY_WINDOW_MINUTES: u64 = 7 * 24 * 60;
+const ROLLOUT_TAIL_BYTES: u64 = 256 * 1024;
+const ROLLOUT_HEAD_BYTES: u64 = 256 * 1024;
+const CODEX_CONTEXT_BASELINE_TOKENS: u64 = 12_000;
+// Codex rollout usage does not include an expiry timestamp. OpenAI documents
+// the default in-memory prompt cache as typically expiring after 5–10 minutes
+// of inactivity and always being removed within one hour of its last use, so
+// the sidebar exposes this as an explicitly approximate upper-bound estimate.
+const CODEX_PROMPT_CACHE_MAX_TTL_SECONDS: u64 = 60 * 60;
 
 pub fn parse_rate_limits(
     value: &Value,
@@ -90,6 +101,14 @@ fn parse_reset(value: &Value) -> Option<ResetAt> {
 }
 
 pub fn fetch() -> Result<ProviderSnapshot> {
+    fetch_for_sessions(&[])
+}
+
+/// Fetch quota and supplement it with local diagnostics for the sessions
+/// currently visible in Herdr. The empty slice is used by direct CLI calls;
+/// the refresh path supplies pane session ids so an older pane is not lost
+/// behind the bounded `thread/list` page.
+pub fn fetch_for_sessions(session_ids: &[String]) -> Result<ProviderSnapshot> {
     let executable = std::env::var_os("CODEX_BIN_PATH").unwrap_or_else(|| "codex".into());
     let mut command = Command::new(executable);
     command
@@ -124,7 +143,7 @@ pub fn fetch() -> Result<ProviderSnapshot> {
         terminate(&watchdog);
     });
 
-    let result = fetch_from_process(&mut input, &mut output);
+    let result = fetch_from_process(&mut input, &mut output, session_ids);
     terminate(&child);
     result
 }
@@ -153,6 +172,7 @@ fn terminate(child: &Mutex<Option<Child>>) {
 fn fetch_from_process(
     input: &mut ChildStdin,
     output: &mut BufReader<impl std::io::Read>,
+    requested_session_ids: &[String],
 ) -> Result<ProviderSnapshot> {
     write_rpc(
         input,
@@ -193,10 +213,303 @@ fn fetch_from_process(
             "useStateDbOnly": true
         }),
     )?;
+    let mut session_ids = requested_session_ids.to_vec();
     if let Ok(threads) = read_rpc(output, 4) {
         snapshot.session_summaries = parse_session_summaries(&threads);
+        for session_id in parse_thread_ids(&threads) {
+            if !session_ids.contains(&session_id) {
+                session_ids.push(session_id);
+            }
+        }
     }
+    enrich_local_sessions(&mut snapshot, &session_ids);
     Ok(snapshot)
+}
+
+fn parse_thread_ids(value: &Value) -> Vec<String> {
+    let result = value.get("result").unwrap_or(value);
+    result
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|thread| {
+            thread
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// Supplement quota data with bounded, local-only reads from the rollout
+/// belonging to each thread returned by `thread/list`. The app-server request
+/// above does not expose live token usage, while the rollout tail does. We
+/// never resume a thread, read prompt text into memory, or scan every pane's
+/// output; only the matching JSONL filenames are opened.
+fn enrich_local_sessions(snapshot: &mut ProviderSnapshot, session_ids: &[String]) {
+    let Some(home) = codex_home().ok() else {
+        return;
+    };
+    enrich_local_sessions_at(snapshot, &home, session_ids);
+}
+
+fn enrich_local_sessions_at(snapshot: &mut ProviderSnapshot, home: &Path, session_ids: &[String]) {
+    if session_ids.is_empty() {
+        return;
+    }
+    let mut newest: Option<(u64, Option<String>, ContextUsage)> = None;
+    let rollout_paths = find_rollout_paths(home, session_ids);
+    for session_id in session_ids {
+        let Some(path) = rollout_paths.get(session_id) else {
+            continue;
+        };
+        let Some(observation) = read_rollout_observation(path, session_id) else {
+            continue;
+        };
+        if let Some(model) = observation.model.clone() {
+            snapshot.session_models.insert(session_id.clone(), model);
+        }
+        let Some(context) = observation.context else {
+            continue;
+        };
+        snapshot
+            .session_contexts
+            .insert(session_id.clone(), context.clone());
+
+        let modified = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| duration.as_secs());
+        if newest
+            .as_ref()
+            .is_none_or(|(current, _, _)| modified >= *current)
+        {
+            newest = Some((modified, observation.model, context));
+        }
+    }
+    if let Some((_, model, context)) = newest {
+        if model.is_some() {
+            snapshot.model = model;
+        }
+        snapshot.context = Some(context);
+    }
+}
+
+fn find_rollout_paths(home: &Path, session_ids: &[String]) -> BTreeMap<String, PathBuf> {
+    let mut directories = vec![home.join("sessions"), home.join("archived_sessions")];
+    let mut newest = BTreeMap::<String, (u64, PathBuf)>::new();
+    while let Some(directory) = directories.pop() {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                directories.push(path);
+                continue;
+            }
+            if !file_type.is_file()
+                || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let matching_ids = session_ids
+                .iter()
+                .filter(|session_id| name.contains(session_id.as_str()));
+            let modified = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |duration| duration.as_secs());
+            for session_id in matching_ids {
+                let replace = newest
+                    .get(session_id)
+                    .is_none_or(|(current, _)| modified >= *current);
+                if replace {
+                    newest.insert(session_id.clone(), (modified, path.clone()));
+                }
+            }
+        }
+    }
+    newest
+        .into_iter()
+        .map(|(session_id, (_, path))| (session_id, path))
+        .collect()
+}
+
+struct RolloutObservation {
+    model: Option<String>,
+    context: Option<ContextUsage>,
+}
+
+fn read_rollout_observation(path: &Path, session_id: &str) -> Option<RolloutObservation> {
+    let mut file = fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(ROLLOUT_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::with_capacity((length - start) as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let text = if start == 0 {
+        text.into_owned()
+    } else {
+        text.split_once('\n')?.1.to_string()
+    };
+    let mut observation = parse_rollout_observation(&text, session_id)?;
+    if observation.model.is_none() {
+        observation.model = read_rollout_head_model(path);
+    }
+    Some(observation)
+}
+
+fn read_rollout_head_model(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(ROLLOUT_HEAD_BYTES).read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    parse_rollout_model(&text)
+}
+
+fn parse_rollout_observation(text: &str, session_id: &str) -> Option<RolloutObservation> {
+    let mut model = None;
+    let mut context = None;
+    for line in text.lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if entry.get("type").and_then(Value::as_str) == Some("turn_context") {
+            let payload = entry.get("payload").unwrap_or(&entry);
+            model = parse_model_payload(payload).or(model);
+            continue;
+        }
+        if entry.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        let payload = entry.get("payload").unwrap_or(&entry);
+        if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+            continue;
+        }
+        let info = payload.get("info").unwrap_or(payload);
+        let Some(last) = info
+            .get("last_token_usage")
+            .or_else(|| info.get("lastTokenUsage"))
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        let Some(window) = info
+            .get("model_context_window")
+            .or_else(|| info.get("modelContextWindow"))
+            .and_then(Value::as_u64)
+        else {
+            continue;
+        };
+        let total = token_count(last, "total_tokens", "totalTokens");
+        if total == 0 || window <= CODEX_CONTEXT_BASELINE_TOKENS {
+            continue;
+        }
+        let used = total.saturating_sub(CODEX_CONTEXT_BASELINE_TOKENS) as f64
+            / (window - CODEX_CONTEXT_BASELINE_TOKENS) as f64
+            * 100.0;
+        let Some(info_object) = info.as_object() else {
+            continue;
+        };
+        let cache_activity = token_count(last, "cached_input_tokens", "cachedInputTokens") > 0
+            || token_count(last, "cache_write_input_tokens", "cacheWriteInputTokens") > 0
+            || token_count(
+                last,
+                "cache_creation_input_tokens",
+                "cacheCreationInputTokens",
+            ) > 0;
+        let cache = parse_rollout_cache(info_object).map(|cache| {
+            let totals = CacheTotals::from_token_counts(
+                cache.fresh_input_tokens,
+                cache.read_tokens,
+                cache.creation_tokens,
+            );
+            let mut cache = cache.with_session_totals(totals, session_id, 0);
+            if cache_activity {
+                if let Some(last_activity_unix) =
+                    entry.get("timestamp").and_then(parse_rollout_timestamp)
+                {
+                    cache = cache
+                        .with_ttl_estimate(CODEX_PROMPT_CACHE_MAX_TTL_SECONDS, last_activity_unix);
+                }
+            }
+            cache
+        });
+        let context_value = ContextUsage::new(used.clamp(0.0, 100.0))
+            .ok()?
+            .with_cache(cache);
+        context = Some(context_value);
+    }
+    Some(RolloutObservation { model, context })
+}
+
+fn parse_rollout_timestamp(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_str()
+            .and_then(ResetAt::parse)
+            .map(ResetAt::unix_seconds)
+    })
+}
+
+fn parse_rollout_model(text: &str) -> Option<String> {
+    text.lines().rev().find_map(|line| {
+        let entry = serde_json::from_str::<Value>(line).ok()?;
+        (entry.get("type").and_then(Value::as_str) == Some("turn_context"))
+            .then(|| parse_model_payload(entry.get("payload").unwrap_or(&entry)))
+            .flatten()
+    })
+}
+
+fn parse_model_payload(payload: &Value) -> Option<String> {
+    payload
+        .get("model")
+        .or_else(|| payload.get("model_slug"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_rollout_cache(info: &serde_json::Map<String, Value>) -> Option<CacheUsage> {
+    let totals = info
+        .get("total_token_usage")
+        .or_else(|| info.get("totalTokenUsage"))
+        .and_then(Value::as_object)
+        .or_else(|| {
+            info.get("last_token_usage")
+                .or_else(|| info.get("lastTokenUsage"))
+                .and_then(Value::as_object)
+        })?;
+    let input = token_count(totals, "input_tokens", "inputTokens");
+    let read = token_count(totals, "cached_input_tokens", "cachedInputTokens");
+    let creation =
+        token_count(totals, "cache_write_input_tokens", "cacheWriteInputTokens").max(token_count(
+            totals,
+            "cache_creation_input_tokens",
+            "cacheCreationInputTokens",
+        ));
+    CacheUsage::from_token_counts(input.saturating_sub(read), read, creation)
+}
+
+fn token_count(object: &serde_json::Map<String, Value>, snake: &str, camel: &str) -> u64 {
+    object
+        .get(snake)
+        .or_else(|| object.get(camel))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
 }
 
 fn parse_session_summaries(value: &Value) -> BTreeMap<String, String> {
@@ -278,12 +591,15 @@ pub fn auth_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("CODEX_AUTH_FILE") {
         return Ok(PathBuf::from(path));
     }
+    Ok(codex_home()?.join("auth.json"))
+}
+
+fn codex_home() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
     let home = PathBuf::from(home);
-    let codex_home = std::env::var_os("CODEX_HOME")
+    Ok(std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".codex"));
-    Ok(codex_home.join("auth.json"))
+        .unwrap_or_else(|| home.join(".codex")))
 }
 
 pub fn current_account_id() -> Option<String> {
@@ -412,5 +728,76 @@ mod tests {
             Some("A real task")
         );
         assert!(!summaries.contains_key("thread-2"));
+    }
+
+    #[test]
+    fn parses_rollout_model_context_and_session_cache() {
+        let observation = parse_rollout_observation(
+            &format!(
+                "{}\n{}\n",
+                serde_json::to_string(&json!({
+                    "type": "turn_context",
+                    "payload": {"model": "gpt-5.6-luna"}
+                }))
+                .unwrap(),
+                serde_json::to_string(&json!({
+                    "type": "event_msg",
+                    "timestamp": "2026-08-26T02:28:42Z",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "total_tokens": 50_000,
+                                "cached_input_tokens": 800,
+                                "cache_write_input_tokens": 100
+                            },
+                            "total_token_usage": {
+                                "input_tokens": 1_000,
+                                "cached_input_tokens": 800,
+                                "cache_write_input_tokens": 100
+                            },
+                            "model_context_window": 100_000
+                        }
+                    }
+                }))
+                .unwrap()
+            ),
+            "session-1",
+        )
+        .unwrap();
+        assert_eq!(observation.model.as_deref(), Some("gpt-5.6-luna"));
+        let context = observation.context.unwrap();
+        assert!((context.used_percent - 43.1818).abs() < 0.001);
+        let cache = context.cache.unwrap();
+        assert_eq!(cache.fresh_input_tokens, 200);
+        assert_eq!(cache.read_tokens, 800);
+        assert_eq!(cache.creation_tokens, 100);
+        assert_eq!(cache.session_id.as_deref(), Some("session-1"));
+        assert_eq!(cache.session_totals.unwrap().hit_percent, 72.72727272727273);
+        assert_eq!(cache.ttl_seconds, Some(60 * 60));
+        assert_eq!(cache.last_activity_unix, Some(1_787_711_322));
+    }
+
+    #[test]
+    fn enriches_only_rollouts_matching_thread_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let rollout_dir = directory.path().join("sessions/2026/08/26");
+        fs::create_dir_all(&rollout_dir).unwrap();
+        fs::write(
+            rollout_dir.join("rollout-session-1.jsonl"),
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.6"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":25000},"model_context_window":100000}}}
+"#,
+        )
+        .unwrap();
+        let mut snapshot = ProviderSnapshot::new(Provider::Codex, vec![], 1);
+        enrich_local_sessions_at(
+            &mut snapshot,
+            directory.path(),
+            &["session-1".to_string(), "other-session".to_string()],
+        );
+        assert_eq!(snapshot.model.as_deref(), Some("gpt-5.6"));
+        assert!(snapshot.session_contexts.contains_key("session-1"));
+        assert!(!snapshot.session_contexts.contains_key("other-session"));
     }
 }

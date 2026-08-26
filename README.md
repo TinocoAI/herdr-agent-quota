@@ -12,17 +12,17 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 中文文档：[README.zh-CN.md](README.zh-CN.md)
 
 ```text
-● Owner · Claude
+● Owner · Claude/Sonnet
   hi                     ← what that pane is actually working on
-  context 23%             ← provider-native context percentage
   cache 99.6% · ttl≈58m    ← session hit rate · remaining cache TTL
+  context 23%             ← provider-native context percentage
   5h 100% 3h07m · 7d 31% 2d3h
 ```
 
 ![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
 *A real Herdr workspace: Claude and Codex show five-hour and weekly reset ETAs
-on one compact row, Grok shows its weekly window, and each agent card uses
+on one compact row, Grok shows its weekly window beside context, and each agent card uses
 the latest user prompt rather than an AI-generated status.*
 
 - **Four providers, one sidebar** — Claude Code, OpenAI Codex, Grok, and
@@ -176,15 +176,15 @@ long turns no longer start one refresh command per tool call.
 
 | Provider | Sidebar windows | Local collection path | Extra setup |
 | --- | --- | --- | --- |
-| Claude Code | `5h` + `7d` + context + cache hit/approx. TTL | Official `statusLine` JSON: `rate_limits`, `context_window`, and `transcript_path` | The configure action installs/chains it and keeps its refresh interval current |
-| OpenAI Codex | `5h` + `7d` + local session summary | One-shot local `codex app-server --stdio`: quota and bounded `thread/list` | ChatGPT subscription login; API-key mode is shown as unavailable |
-| Grok CLI / Grok Build | `week` | Local `~/.grok/auth.json` and the billing contract used by the official CLI | Covered by the unified watcher; no response hook is installed |
-| Agy / Antigravity CLI | `5h` + `week` + context + cache hit | Official `statusLine` JSON: `quota` and `context_window` | The configure action installs and chains it automatically |
+| Claude Code | model + `5h` + `7d` + context + cache hit/approx. TTL | Official `statusLine` JSON: `model`, `rate_limits`, `context_window`, and `transcript_path` | The configure action installs/chains it and keeps its refresh interval current |
+| OpenAI Codex | model + `5h` + `7d` + context + cache + approx. TTL + local session summary | One-shot local `codex app-server --stdio` plus a bounded tail read of matching `~/.codex` rollout JSONL | ChatGPT subscription login; API-key mode is shown as unavailable |
+| Grok CLI / Grok Build | model + `week` + context + cache | Local `~/.grok/auth.json` billing plus bounded reads of `signals.json`/`updates.jsonl` session metadata | Covered by the unified watcher; no response hook is installed |
+| Agy / Antigravity CLI | model + `5h` + `week` + context + cache hit | Official `statusLine` JSON: `model`, `quota`, and `context_window` | The configure action installs and chains it automatically |
 
 The sidebar shows **percentage remaining** and the time until each quota reset,
 not quota token counts. The two Claude windows use compact `5h` and `7d`
 labels on one row; each still keeps its own dynamic health color. Claude and
-Agy also show provider-reported context percentage. When a statusLine transcript
+Agy also show the provider-reported model display name and context percentage. When a statusLine transcript
 and session id are available,
 `cache N.N%` is the cumulative main-session ratio
 (`read / (fresh + creation + read)`), not the latest turn. The same row shows,
@@ -192,14 +192,19 @@ for Claude, a `ttl≈...` estimate from the provider's 5-minute/1-hour bucket.
 This is local diagnostic math, not a server-confirmed expiry; the first session
 update reads the existing transcript once, then later updates read only
 appended bytes.
-Codex shows five-hour and weekly windows plus a short session preview from its
-local state database; its live context and cache fields are not queried because
-the current safe app-server connection is quota-only and does not attach to an
-active thread. Grok's current billing source has neither context nor cache
-fields. During a working
+Codex supplements its five-hour/weekly windows and short session preview with
+the latest `last_token_usage` context from the matching rollout tail and a
+cumulative cache ratio from its local token counters. When a cache-bearing
+rollout event has a timestamp, it also shows an explicitly approximate
+one-hour upper-bound TTL; Codex does not persist an exact expiry timestamp.
+Grok supplements its weekly billing window with model/context signals and the
+latest cache counters from the matching local session files. During a working
 turn, one short-lived global watcher polls once per configured interval,
 coalesces active fetches, and exits when all selected providers settle. The
 sidebar does not run a permanent daemon.
+
+Grok has only a weekly quota window, so its provider-specific row places that
+limit beside context instead of leaving an empty slot on the right.
 
 A failed refresh never replaces a successful cached value with `unavailable`;
 a provider without any successful snapshot is shown as `N/A` until its first
@@ -223,13 +228,14 @@ once:
 [ui.sidebar.agents]
 row_gap = 1 # herdr-agent-quota
 rows = [
-  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }, { token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
+  ["state_icon", "tab", { token = "$quota_provider_model", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
   [
-    { token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false },
-    { token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false },
+    { token = "$quota_cache", fg = "#9aa7b8", bold = true, dim = false },
+    { token = "$quota_cache_ttl", fg = "#9aa7b8", bold = true, dim = false },
     { token = "$quota_error", fg = "#ca6470", bold = true, dim = false },
   ],
+  [{ token = "$quota_context", fg = "#9aa7b8", bold = true, dim = false }],
   [
     { token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false },
     { token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false },
@@ -242,7 +248,13 @@ rows = [
 ```
 
 - `state_icon` and `tab` are Herdr's built-in status and plane labels.
-- `$quota_provider` is `Claude`, `Codex`, `Grok`, or `Agy`.
+- `$quota_provider_model` is the compact identity label `Provider/Model`, for
+  example `Claude/Sonnet`. When the model is unavailable it contains only the
+  provider name. `$quota_provider` and `$quota_model` remain available for
+  custom layouts and older configurations.
+- Model and provider values are tracked per session, so same-provider panes can
+  show different models; Codex and Grok hide the model only when their local
+  session data is unavailable.
 - Default provider labels use recognizable brand colors without affecting quota
   health: Claude soft orange, Codex pastel blue, Grok soft white, and an
   Antigravity-inspired mint for Agy.
@@ -250,15 +262,34 @@ rows = [
   then resource status.
 - For Codex, an empty/default prompt falls back to the short thread preview from
   the local app-server state database; other providers keep the prompt empty.
-- `$quota_context` is the provider-reported context **used** percentage and sits
-  directly after the provider name. `$quota_cache` is the cumulative hit rate
+- Codex context uses the latest rollout `last_token_usage` against its reported
+  model window; Codex cache uses the session token counters. If the latest
+  cache-bearing rollout event has a timestamp, `$quota_cache_ttl` shows an
+  explicitly approximate one-hour upper-bound estimate based on that activity;
+  it is not an exact server expiry. Grok context comes from `signals.json`, and
+  Grok cache from the latest usage update. These are local diagnostics, not
+  quota-window percentages; missing session fields stay hidden.
+- `$quota_context` is the provider-reported context **used** percentage and is
+  the penultimate row, immediately above the quota limits. `$quota_cache` is the cumulative hit rate
   for the main session transcript, not a per-turn value; it is shown to one
   decimal place so `99.6%` is not rounded to `100%`. `$quota_cache_ttl` is the
-  remaining approximate TTL when Claude exposes a 5m/1h bucket; when it reaches
-  zero, the red `$quota_error` token says `no cached`. Both cache values share
-  one row; missing fields are hidden instead of guessed.
-- The context row uses a violet accent (`#9b8fd8`) so context pressure is easy
-  to distinguish from the green/amber/red quota runway colors.
+  remaining approximate TTL when Claude exposes a 5m/1h bucket or Codex has a
+  timestamped cache-bearing rollout event; when it reaches zero, the red
+  `$quota_error` token says `no cached`. Both cache values share one row;
+  missing fields are hidden instead of guessed.
+- The provider and model share each provider's brand color so same-provider
+  cards are easy to scan. Cache, TTL, and context share one muted diagnostic
+  color (`#9aa7b8`); only quota runway health and explicit errors use green,
+  amber, and red.
+- For Grok's weekly-only quota, `rows_by_agent.grok` puts the weekly limit on
+  the context row because there is no five-hour value to occupy a separate
+  slot. Other providers keep context as the penultimate row and limits as the
+  final row.
+- Claude and Agy statusLine diagnostics are keyed by session. A new session
+  starts without the previous session's cache/context values; Codex and Grok
+  read only visible session files. Per-session diagnostic maps are capped at
+  128 entries, and the watcher uses one metadata-only Herdr inventory call per
+  poll, so historical sessions cannot grow memory without bound.
 - Each window publishes exactly one styled variant. Herdr renders adjacent
   values on the same row with `·` separators and removes separators for missing
   values, so 5h/7d stay compact while retaining independent colors. Color
@@ -297,15 +328,17 @@ such as `Thinking` or `Executing`. It does not show the working directory.
 
 - **Codex:** the local official [app-server JSON-RPC](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
   rate-limit response plus one bounded, state-database-only `thread/list` for
-  session previews. The plugin maps the provider-reported five-hour and
-  seven-day windows by duration, rather than assuming which field is primary.
-  API-key authentication is intentionally not mislabeled as a ChatGPT
-  subscription quota. It does not resume threads or read rollout JSONL, so it
-  cannot claim a live context percentage. Only the first non-empty line of at
-  most 50 previews is retained, truncated to 80 characters.
+  session previews. For those returned thread ids, the plugin reads only the
+  tail of the matching `~/.codex/sessions`/`archived_sessions` rollout JSONL:
+  `last_token_usage` supplies current context and the cumulative token bucket
+  supplies cache hit rate. It never resumes a thread or starts a model turn.
+  API-key authentication is intentionally not mislabeled as a ChatGPT quota;
+  only the first non-empty line of at most 50 previews is retained.
 - **Grok:** the local `~/.grok/auth.json` login key is read in memory and sent
   to the weekly billing endpoint used by the Grok CLI. The response is accepted
-  only when it identifies a weekly period. This is SuperGrok usage, not xAI
+  only when it identifies a weekly period. A bounded scan of the newest local
+  session metadata (`signals.json` and the tail of `updates.jsonl`) supplements
+  model, context, and cache counters. This is SuperGrok usage, not xAI
   developer/API-team billing. The unified watcher and the existing 60-second
   debounce limit active requests; it never logs in or refreshes the key.
 - **Claude Code:** the official [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline)
@@ -320,6 +353,11 @@ such as `Thinking` or `Executing`. It does not show the working directory.
   transcript once and later updates read only appended lines. A cache bucket
   gives the explicitly approximate `ttl≈...`; there is no network request or
   model turn.
+- **OpenAI Codex:** the matching rollout tail supplies token counters and event
+  timestamps. The adapter uses the latest cache-bearing event to show a local
+  approximate one-hour upper-bound TTL, following [OpenAI's prompt-cache
+  retention guidance](https://openai.com/index/api-prompt-caching/); the rollout
+  does not expose an exact expiry timestamp.
 - **Agy/Antigravity:** the official [`/usage` and statusline docs](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
   supply Gemini and third-party pools plus context-used percentage and cache
   counters. When both pools exist, the sidebar uses the lowest remaining
@@ -368,6 +406,10 @@ The cache/context field investigation and open-source comparison are documented
 in [`docs/research/cache-observability-open-source.md`](docs/research/cache-observability-open-source.md).
 The Grok source investigation is documented in
 [`docs/research/codexbar-grok-usage.md`](docs/research/codexbar-grok-usage.md),
+and the Codex/Grok local context-cache comparison is in
+[`docs/research/codex-grok-context-cache.md`](docs/research/codex-grok-context-cache.md),
+the issue-22 display/session design is in
+[`docs/research/issue-22-model-display.md`](docs/research/issue-22-model-display.md),
 and the implementation contract is in
 [`docs/plans/herdr-agent-quota-implementation.md`](docs/plans/herdr-agent-quota-implementation.md).
 
