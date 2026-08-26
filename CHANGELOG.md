@@ -8,16 +8,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Context now follows the provider name, while cache diagnostics use two
-  dedicated rows: a one-decimal cumulative session hit rate and the elapsed
-  time since the latest cache-bearing response plus an explicitly approximate
-  TTL estimate when the provider exposes a cache bucket. Claude/Agy collectors
-  use local statusLine/transcript data only; they do not log in or start model
-  requests.
+- Provider rows now use one compact `$quota_provider_model` identity token
+  (`Provider/Model`, with the model omitted when unavailable); provider and
+  model share the provider's brand color. Context is the penultimate row,
+  while cache diagnostics use a dedicated row: a one-decimal cumulative
+  session hit rate and the elapsed time
+  since the latest cache-bearing response plus an explicitly approximate TTL
+  estimate when the provider exposes a cache bucket or Codex supplies a
+  timestamped cache-bearing rollout event. Claude/Agy collectors use local
+  statusLine/transcript data only; they do not log in or start model requests.
+- Codex now reads the bounded tail of each matching local rollout to publish
+  per-session model, current context, and cumulative cache diagnostics. Grok
+  supplements its billing snapshot with bounded local `signals.json` and
+  `updates.jsonl` session metadata, so both providers expose context/cache when
+  the local session files contain those fields; missing data remains hidden.
+- Grok's weekly-only limit is placed beside context in its provider-specific
+  row, and Claude/Agy statusLine diagnostics are keyed by session so a fresh
+  session cannot inherit another session's cache. All per-session maps are
+  bounded to 128 entries.
 - Quota rows now show compact `5h`/`7d` window labels with minutes below one
   hour, hours and minutes below one day, and days plus hours for longer windows.
 - Cache hit rate and remaining cache TTL now share one short, color-separated
   sidebar row; the verbose last-activity text is no longer shown.
+- Cache, TTL, and context diagnostics now share one muted blue-gray style;
+  provider/model keep their brand color, while green/amber/red are reserved
+  for quota runway health and explicit errors.
 - Claude's plugin-owned statusLine now receives the configured global watcher
   interval as its native `refreshInterval`, keeping idle-session reset times
   fresh without an API call or model request; existing user-owned intervals are
@@ -71,6 +86,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaving an old weekly reset on the sidebar.
 - Weekly-only providers now use the readable `week ... reset ...` label; the
   compact `5h`/`7d` form remains for providers that expose both windows.
+- Grok local-session enrichment now checks only the pane-matched two-level
+  session paths, with a bounded newest-session fallback for direct refreshes;
+  it no longer recursively scans the entire historical session tree.
 
 - Agent topics now come only from the latest user prompt in pane output. Native
   `Thinking`/`Executing` titles and other AI status text are no longer published

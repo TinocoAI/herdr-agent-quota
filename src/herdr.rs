@@ -7,9 +7,11 @@ use std::process::Command;
 
 const METADATA_TTL_MS: &str = "86400000";
 const MAX_METADATA_TOKENS: usize = 16;
-const METADATA_TOKEN_NAMES: [&str; 16] = [
+const METADATA_TOKEN_NAMES: [&str; 18] = [
     "quota_state",
     "quota_provider",
+    "quota_model",
+    "quota_provider_model",
     "quota_summary",
     "quota_context",
     "quota_cache",
@@ -42,6 +44,12 @@ pub struct AgentPane {
 pub struct AgentState {
     pub panes: Vec<AgentPane>,
     pub working_providers: Vec<Provider>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PaneTokens {
+    pub pane_id: String,
+    pub values: MetadataTokens,
 }
 
 pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
@@ -231,18 +239,44 @@ fn collect_working_providers(value: &Value, providers: &mut Vec<Provider>) {
     }
 }
 
+/// Publish one provider-wide token set to every matching pane.
+///
+/// Kept as the compatibility entry point for callers that do not need
+/// session-specific model labels. The refresh path uses
+/// [`publish_pane_tokens`] so same-provider panes can differ.
 pub fn publish_tokens(
     panes: &[AgentPane],
     tokens: &[(Provider, MetadataTokens)],
+    sequence: u64,
+) -> Result<()> {
+    let pane_tokens = panes
+        .iter()
+        .filter_map(|pane| {
+            tokens
+                .iter()
+                .find(|(provider, _)| *provider == pane.provider)
+                .map(|(_, values)| PaneTokens {
+                    pane_id: pane.pane_id.clone(),
+                    values: values.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    publish_pane_tokens(panes, &pane_tokens, sequence)
+}
+
+pub fn publish_pane_tokens(
+    panes: &[AgentPane],
+    tokens: &[PaneTokens],
     sequence: u64,
 ) -> Result<()> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut reported = 0usize;
     let mut failed = Vec::new();
     for pane in panes {
-        let Some((_, values)) = tokens
+        let Some(values) = tokens
             .iter()
-            .find(|(provider, _)| *provider == pane.provider)
+            .find(|tokens| tokens.pane_id == pane.pane_id)
+            .map(|tokens| &tokens.values)
         else {
             continue;
         };
@@ -317,8 +351,13 @@ fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, Stri
     let mut tokens = BTreeMap::from([
         ("quota_state".to_string(), values.quota_state.clone()),
         ("quota_provider".to_string(), values.quota_provider.clone()),
+        (
+            "quota_provider_model".to_string(),
+            values.quota_provider_model.clone(),
+        ),
         ("quota_summary".to_string(), values.quota_summary.clone()),
     ]);
+    insert_optional_token(&mut tokens, "quota_model", &values.quota_model);
     insert_optional_token(&mut tokens, "quota_context", &values.quota_context);
     insert_optional_token(&mut tokens, "quota_cache", &values.quota_cache);
     insert_optional_token(&mut tokens, "quota_cache_ttl", &values.quota_cache_ttl);
@@ -407,6 +446,8 @@ fn metadata_report_names(
             !matches!(
                 *name,
                 "quota_context"
+                    | "quota_model"
+                    | "quota_provider_model"
                     | "quota_cache"
                     | "quota_cache_ttl"
                     | "quota_provider"

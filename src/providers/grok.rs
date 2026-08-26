@@ -1,13 +1,21 @@
 use crate::cache::CacheStore;
-use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
+use crate::model::{
+    CacheTotals, CacheUsage, ContextUsage, Provider, ProviderSnapshot, ResetAt, UsageWindow,
+    WindowKind,
+};
 use crate::providers::ProviderError;
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+const GROK_SESSION_TAIL_BYTES: u64 = 128 * 1024;
+const MAX_LOCAL_SESSIONS: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrokCredentials {
@@ -16,6 +24,13 @@ pub struct GrokCredentials {
 }
 
 pub fn fetch() -> Result<ProviderSnapshot> {
+    fetch_for_sessions(&[])
+}
+
+/// Fetch Grok billing and enrich only the visible pane sessions when Herdr
+/// provides their ids. Direct CLI refreshes pass an empty slice and use the
+/// bounded newest-session fallback instead.
+pub fn fetch_for_sessions(session_ids: &[String]) -> Result<ProviderSnapshot> {
     let path = auth_path().context("resolve Grok auth path")?;
     let credentials = read_credentials(&path).map_err(anyhow::Error::from)?;
     let agent = ureq::AgentBuilder::new()
@@ -38,21 +53,25 @@ pub fn fetch() -> Result<ProviderSnapshot> {
     let value: Value = response
         .into_json()
         .context("decode Grok billing response")?;
-    parse_billing_response(&value, CacheStore::now_unix())
-        .map(|snapshot| snapshot.with_account_id(credentials.user_id.clone()))
-        .map_err(anyhow::Error::from)
+    let mut snapshot =
+        parse_billing_response(&value, CacheStore::now_unix()).map_err(anyhow::Error::from)?;
+    enrich_local_sessions(&mut snapshot, session_ids);
+    Ok(snapshot.with_account_id(credentials.user_id.clone()))
 }
 
 pub fn auth_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("GROK_AUTH_FILE") {
         return Ok(PathBuf::from(path));
     }
+    Ok(grok_home()?.join("auth.json"))
+}
+
+fn grok_home() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
     let home = PathBuf::from(home);
-    let grok_home = std::env::var_os("GROK_HOME")
+    Ok(std::env::var_os("GROK_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".grok"));
-    Ok(grok_home.join("auth.json"))
+        .unwrap_or_else(|| home.join(".grok")))
 }
 
 pub fn read_credentials(path: &Path) -> std::result::Result<GrokCredentials, ProviderError> {
@@ -189,6 +208,263 @@ pub fn parse_billing_response(
         vec![window],
         fetched_at_unix,
     ))
+}
+
+/// Read the small, provider-owned session metadata files that Grok writes
+/// locally. Billing remains the quota source; these files only supplement the
+/// pane diagnostics that billing does not contain. The scan is bounded to the
+/// newest session directories and never reads Herdr panes or prompt text.
+fn enrich_local_sessions(snapshot: &mut ProviderSnapshot, session_ids: &[String]) {
+    let Some(home) = grok_home().ok() else {
+        return;
+    };
+    enrich_local_sessions_at(snapshot, &home, session_ids);
+}
+
+fn enrich_local_sessions_at(snapshot: &mut ProviderSnapshot, home: &Path, session_ids: &[String]) {
+    let sessions_dir = home.join("sessions");
+    let signals = if session_ids.is_empty() {
+        collect_recent_signal_files(&sessions_dir)
+    } else {
+        collect_matching_signal_files(&sessions_dir, session_ids)
+    };
+
+    let mut newest: Option<(u64, Option<String>, ContextUsage)> = None;
+    for (modified, signals_path) in signals {
+        let Some(session_id) = signals_path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let Ok(signals_value) = read_json(&signals_path) else {
+            continue;
+        };
+        let updates = signals_path
+            .parent()
+            .map(|directory| directory.join("updates.jsonl"))
+            .and_then(|path| read_jsonl_tail(&path));
+        let Some(observation) = parse_local_session(&signals_value, updates.as_deref(), session_id)
+        else {
+            continue;
+        };
+        if let Some(model) = observation.model.clone() {
+            snapshot
+                .session_models
+                .insert(session_id.to_string(), model);
+        }
+        let Some(context) = observation.context else {
+            continue;
+        };
+        snapshot
+            .session_contexts
+            .insert(session_id.to_string(), context.clone());
+        if newest
+            .as_ref()
+            .is_none_or(|(current, _, _)| modified >= *current)
+        {
+            newest = Some((modified, observation.model, context));
+        }
+    }
+    if let Some((_, model, context)) = newest {
+        if model.is_some() {
+            snapshot.model = model;
+        }
+        snapshot.context = Some(context);
+    }
+}
+
+/// Grok stores sessions at `sessions/<encoded-cwd>/<session-id>/signals.json`.
+/// Keep the no-id fallback bounded to actual session directories instead of
+/// recursively walking every file under the 9GB session tree.
+fn collect_recent_signal_files(directory: &Path) -> Vec<(u64, PathBuf)> {
+    let Ok(cwd_entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    // Keep only the newest bounded set while traversing. A user's Grok
+    // history can contain tens of thousands of sessions; collecting every
+    // path before sorting makes memory grow with that historical count even
+    // though only the newest 128 can affect the sidebar.
+    let mut newest = BinaryHeap::with_capacity(MAX_LOCAL_SESSIONS);
+    for cwd_entry in cwd_entries.flatten() {
+        let Ok(cwd_type) = cwd_entry.file_type() else {
+            continue;
+        };
+        if !cwd_type.is_dir() {
+            continue;
+        }
+        let Ok(session_entries) = fs::read_dir(cwd_entry.path()) else {
+            continue;
+        };
+        for session_entry in session_entries.flatten() {
+            let Ok(session_type) = session_entry.file_type() else {
+                continue;
+            };
+            if !session_type.is_dir() {
+                continue;
+            }
+            let signals_path = session_entry.path().join("signals.json");
+            let Some(modified) = CacheStore::file_mtime_unix(&signals_path) else {
+                continue;
+            };
+            newest.push(Reverse((modified, signals_path)));
+            if newest.len() > MAX_LOCAL_SESSIONS {
+                newest.pop();
+            }
+        }
+    }
+    let mut output = newest
+        .into_iter()
+        .map(|Reverse(candidate)| candidate)
+        .collect::<Vec<_>>();
+    output.sort_by_key(|candidate| Reverse(candidate.0));
+    output
+}
+
+/// With pane ids available, check only the expected session paths. This is
+/// the hot path used by the active-turn watcher and avoids scanning unrelated
+/// historical sessions altogether.
+fn collect_matching_signal_files(directory: &Path, session_ids: &[String]) -> Vec<(u64, PathBuf)> {
+    let Ok(cwd_entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut output = Vec::new();
+    for cwd_entry in cwd_entries.flatten() {
+        let Ok(cwd_type) = cwd_entry.file_type() else {
+            continue;
+        };
+        if !cwd_type.is_dir() {
+            continue;
+        }
+        for session_id in session_ids {
+            let signals_path = cwd_entry.path().join(session_id).join("signals.json");
+            let Some(modified) = CacheStore::file_mtime_unix(&signals_path) else {
+                continue;
+            };
+            output.push((modified, signals_path));
+        }
+    }
+    output
+}
+
+struct LocalSessionObservation {
+    model: Option<String>,
+    context: Option<ContextUsage>,
+}
+
+fn parse_local_session(
+    signals: &Value,
+    updates: Option<&str>,
+    session_id: &str,
+) -> Option<LocalSessionObservation> {
+    let model = signals
+        .get("primaryModelId")
+        .or_else(|| signals.get("primary_model_id"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            signals
+                .get("modelsUsed")
+                .or_else(|| signals.get("models_used"))
+                .and_then(Value::as_array)
+                .and_then(|models| models.iter().rev().find_map(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string);
+
+    let used = signals
+        .get("contextWindowUsage")
+        .or_else(|| signals.get("context_window_usage"))
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            let used = signals
+                .get("contextTokensUsed")
+                .or_else(|| signals.get("context_tokens_used"))
+                .and_then(Value::as_f64)?;
+            let capacity = signals
+                .get("contextWindowTokens")
+                .or_else(|| signals.get("context_window_tokens"))
+                .and_then(Value::as_f64)?;
+            (capacity > 0.0).then_some(used / capacity * 100.0)
+        });
+    let cache =
+        parse_update_cache(updates, session_id).or_else(|| parse_signal_cache(signals, session_id));
+    let context = used
+        .and_then(|used| ContextUsage::new(used.clamp(0.0, 100.0)).ok())
+        .map(|context| context.with_cache(cache));
+    (model.is_some() || context.is_some()).then_some(LocalSessionObservation { model, context })
+}
+
+fn parse_signal_cache(signals: &Value, session_id: &str) -> Option<CacheUsage> {
+    let object = signals.as_object()?;
+    let input = token_count(object, "inputTokens", "input_tokens");
+    let read = token_count(object, "cachedReadTokens", "cached_read_tokens");
+    let creation = token_count(object, "cacheCreationTokens", "cache_creation_tokens");
+    cache_usage(input, read, creation, session_id)
+}
+
+fn parse_update_cache(updates: Option<&str>, session_id: &str) -> Option<CacheUsage> {
+    let mut latest = None;
+    for line in updates?.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(usage) = value
+            .pointer("/params/update/usage")
+            .or_else(|| value.pointer("/update/usage"))
+            .or_else(|| value.pointer("/usage"))
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        let input = token_count(usage, "inputTokens", "input_tokens");
+        let read = token_count(usage, "cachedReadTokens", "cached_read_tokens");
+        let creation = token_count(usage, "cacheCreationTokens", "cache_creation_tokens");
+        if let Some(cache) = cache_usage(input, read, creation, session_id) {
+            latest = Some(cache);
+            break;
+        }
+    }
+    latest
+}
+
+fn cache_usage(input: u64, read: u64, creation: u64, session_id: &str) -> Option<CacheUsage> {
+    let cache = CacheUsage::from_token_counts(input.saturating_sub(read), read, creation)?;
+    let totals = CacheTotals::from_token_counts(
+        cache.fresh_input_tokens,
+        cache.read_tokens,
+        cache.creation_tokens,
+    );
+    Some(cache.with_session_totals(totals, session_id, 0))
+}
+
+fn token_count(object: &serde_json::Map<String, Value>, camel: &str, snake: &str) -> u64 {
+    object
+        .get(camel)
+        .or_else(|| object.get(snake))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+}
+
+fn read_json(path: &Path) -> Result<Value> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
+}
+
+fn read_jsonl_tail(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(GROK_SESSION_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::with_capacity((length - start) as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    let tail = String::from_utf8_lossy(&bytes);
+    if start == 0 {
+        return Some(tail.into_owned());
+    }
+    tail.split_once('\n').map(|(_, lines)| lines.to_string())
 }
 
 fn http_error_status(error: &ureq::Error) -> String {
@@ -337,5 +613,81 @@ mod tests {
                 user_id: Some("u-new".to_string())
             }
         );
+    }
+
+    #[test]
+    fn parses_local_session_context_model_and_cache() {
+        let signals = json!({
+            "contextWindowUsage": 16,
+            "contextTokensUsed": 80_000,
+            "contextWindowTokens": 500_000,
+            "primaryModelId": "grok-4.6"
+        });
+        let updates = r#"{"method":"_x.ai/session/update","params":{"update":{"usage":{"inputTokens":1000,"cachedReadTokens":800,"cacheCreationTokens":100}}}}
+"#;
+        let observation = parse_local_session(&signals, Some(updates), "session-1").unwrap();
+        assert_eq!(observation.model.as_deref(), Some("grok-4.6"));
+        assert_eq!(observation.context.as_ref().unwrap().used_percent, 16.0);
+        let cache = observation.context.unwrap().cache.unwrap();
+        assert_eq!(cache.fresh_input_tokens, 200);
+        assert_eq!(cache.read_tokens, 800);
+        assert_eq!(cache.creation_tokens, 100);
+        assert_eq!(cache.session_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn scans_session_files_without_broadcasting_unknown_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let session_dir = directory.path().join("sessions/cwd/session-1");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("signals.json"),
+            r#"{"contextWindowUsage":25,"primaryModelId":"grok-4.5"}"#,
+        )
+        .unwrap();
+        fs::write(
+            session_dir.join("updates.jsonl"),
+            r#"{"params":{"update":{"usage":{"inputTokens":10,"cachedReadTokens":5}}}}"#,
+        )
+        .unwrap();
+        let mut snapshot = ProviderSnapshot::new(Provider::Grok, vec![], 1);
+        enrich_local_sessions_at(&mut snapshot, directory.path(), &["session-1".to_string()]);
+        assert_eq!(snapshot.session_models["session-1"], "grok-4.5");
+        assert!(snapshot.context_for_session(Some("session-1")).is_some());
+        assert!(snapshot.context_for_session(Some("session-2")).is_none());
+    }
+
+    #[test]
+    fn matching_session_scan_checks_only_the_expected_two_level_layout() {
+        let directory = tempfile::tempdir().unwrap();
+        let matching = directory.path().join("sessions/cwd/session-1");
+        let unrelated_nested = directory.path().join("sessions/old/nested/session-1");
+        fs::create_dir_all(&matching).unwrap();
+        fs::create_dir_all(&unrelated_nested).unwrap();
+        fs::write(matching.join("signals.json"), "{}").unwrap();
+        fs::write(unrelated_nested.join("signals.json"), "{}").unwrap();
+
+        let files = collect_matching_signal_files(
+            &directory.path().join("sessions"),
+            &["session-1".to_string()],
+        );
+        assert_eq!(files.len(), 1);
+        assert!(files[0].1.ends_with("sessions/cwd/session-1/signals.json"));
+    }
+
+    #[test]
+    fn recent_session_scan_keeps_only_a_bounded_newest_set() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..(MAX_LOCAL_SESSIONS + 8) {
+            let session_dir = directory
+                .path()
+                .join("sessions/cwd")
+                .join(format!("session-{index}"));
+            fs::create_dir_all(&session_dir).unwrap();
+            fs::write(session_dir.join("signals.json"), "{}").unwrap();
+        }
+
+        let files = collect_recent_signal_files(&directory.path().join("sessions"));
+        assert_eq!(files.len(), MAX_LOCAL_SESSIONS);
     }
 }

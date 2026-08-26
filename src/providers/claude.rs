@@ -1,6 +1,6 @@
 use crate::cache::CacheStore;
 use crate::model::{Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
-use crate::providers::statusline::{enrich_cache_ttl, parse_context};
+use crate::providers::statusline::{enrich_cache_ttl, parse_context, parse_model};
 use crate::providers::ProviderError;
 use serde_json::Value;
 
@@ -14,9 +14,12 @@ pub fn parse_statusline(
             .or_else(|| value.get("contextWindow")),
     )
     .unwrap_or(None);
+    let model = parse_model(value);
     let Some(limits) = value.get("rate_limits") else {
         return Ok(
-            ProviderSnapshot::new(Provider::Claude, vec![], fetched_at_unix).with_context(context),
+            ProviderSnapshot::new(Provider::Claude, vec![], fetched_at_unix)
+                .with_model(model)
+                .with_context(context),
         );
     };
     let mut windows = Vec::new();
@@ -28,10 +31,16 @@ pub fn parse_statusline(
     }
     if windows.is_empty() {
         return Ok(
-            ProviderSnapshot::new(Provider::Claude, vec![], fetched_at_unix).with_context(context),
+            ProviderSnapshot::new(Provider::Claude, vec![], fetched_at_unix)
+                .with_model(model)
+                .with_context(context),
         );
     }
-    Ok(ProviderSnapshot::new(Provider::Claude, windows, fetched_at_unix).with_context(context))
+    Ok(
+        ProviderSnapshot::new(Provider::Claude, windows, fetched_at_unix)
+            .with_model(model)
+            .with_context(context),
+    )
 }
 
 fn parse_window(
@@ -118,6 +127,16 @@ mod tests {
         assert_eq!(cache.read_tokens, 800);
         assert_eq!(cache.creation_tokens, 100);
         assert_eq!(cache.hit_percent, 80.0);
+    }
+
+    #[test]
+    fn parses_the_human_readable_active_model_name() {
+        let value = json!({
+            "model": {"id": "claude-sonnet-4-20250514", "display_name": "Sonnet"},
+            "rate_limits": {"five_hour": {"used_percentage": 1.0}}
+        });
+        let snapshot = parse_statusline(&value, 1).unwrap();
+        assert_eq!(snapshot.model.as_deref(), Some("Sonnet"));
     }
 
     #[test]

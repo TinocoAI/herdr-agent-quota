@@ -12,17 +12,17 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 [English README](README.md)
 
 ```text
-● Owner · Claude
+● Owner · Claude/Sonnet
   hi                     ← 这个 pane 当前在做什么
-  context 23%             ← provider 原生 context 百分比
   cache 99.6% · ttl≈58m    ← session 命中率 · 剩余缓存时间
+  context 23%             ← provider 原生 context 百分比
   5h 100% 3h07m · 7d 31% 2d3h
 ```
 
 ![Herdr 左侧额度截图](docs/screenshots/herdr-sidebar-live.png)
 
 *真实的 Herdr 工作区：Claude 和 Codex 在一行紧凑显示 5 小时和 7 天额度及其重置倒计时，
-Grok 显示周额度；每张 agent 卡片的话题来自用户最后一次输入，
+Grok 把周额度放在 context 旁边；每张 agent 卡片的话题来自用户最后一次输入，
 不会使用 AI 生成的状态标题。*
 
 - **四个 provider，一个侧栏** —— Claude Code、OpenAI Codex、Grok、Agy/Antigravity。
@@ -147,28 +147,29 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会
 
 | Provider | 侧栏显示 | 本地数据来源 | 额外配置 |
 | --- | --- | --- | --- |
-| Claude Code | `5h` + `7d` + context + 缓存命中率/近似 TTL | 官方 `statusLine` JSON：`rate_limits`、`context_window`、`transcript_path` | 配置 action 自动安装/串联，并保持原生刷新间隔与 watcher 一致 |
-| OpenAI Codex | `5h` + `7d` + 本地会话摘要 | 一次性的 `codex app-server --stdio`：额度和有上限的 `thread/list` | 使用 ChatGPT 订阅登录；API key 模式显示为不可用；不会 resume thread |
-| Grok CLI / Grok Build | `week` | `~/.grok/auth.json` 和官方 CLI 使用的额度接口 | 由统一 watcher 处理，不再安装回复 hook |
-| Agy / Antigravity CLI | `5h` + `week` + context + 缓存命中率 | 官方 `statusLine` JSON 的 `quota` 和 `context_window` | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
+| Claude Code | model + `5h` + `7d` + context + 缓存命中率/近似 TTL | 官方 `statusLine` JSON：`model`、`rate_limits`、`context_window`、`transcript_path` | 配置 action 自动安装/串联，并保持原生刷新间隔与 watcher 一致 |
+| OpenAI Codex | model + `5h` + `7d` + context + cache + 近似 TTL + 本地会话摘要 | 一次性的 `codex app-server --stdio`，加上按 thread 匹配的 `~/.codex` rollout 尾部 | 使用 ChatGPT 订阅登录；API key 模式显示为不可用；不会 resume thread |
+| Grok CLI / Grok Build | model + `week` + context + cache | `~/.grok/auth.json` 额度接口，加上有上限的 `signals.json`/`updates.jsonl` 会话元数据 | 由统一 watcher 处理，不再安装回复 hook |
+| Agy / Antigravity CLI | model + `5h` + `week` + context + 缓存命中率 | 官方 `statusLine` JSON 的 `model`、`quota` 和 `context_window` | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
 
 侧栏显示的是**额度剩余百分比**和距离下次额度重置的时间，不是额度 token 数量。
 Claude 的两个窗口会用紧凑的 `5h` 和 `7d` 标签放在同一行，但仍各自保留动态健康色。
-Claude 和 Agy 的 statusLine 有 context 字段时，还会显示当前 context **已用**百分比。
+Claude、Agy，以及本地会话文件有对应字段的 Codex/Grok，会显示当前模型显示名和 context **已用**百分比。
 如果有 statusLine transcript 和 session id，`cache N.N%` 是主 session 的累计命中率
 （`read / (fresh + creation + read)`），不是最新一轮；同一行在 Claude 有明确的
 5 分钟/1 小时缓存桶时显示剩余 `ttl≈...`，这是本地近似，不是服务端确认的过期时间。
-首次 session 更新会读取一次已有 transcript，之后只读新增字节。Codex 会显示 5 小时和
-7 天额度，以及本地 state database 里的短会话预览；
-当前安全的 app-server 连接只查额度，没有绑定活动 thread，因此不猜测 Codex context
-或缓存字段。Grok 当前的 billing 来源没有 context 或缓存字段。没有证据的字段会隐藏，
+Codex 在最新 cache-bearing rollout 事件有时间戳时，也会按 OpenAI 文档的最长 1 小时
+保留上限显示近似 TTL；它不是精确的服务端过期时间。首次 session 更新会读取一次已有 transcript，之后只读新增字节。Codex 会显示 5 小时和
+7 天额度，以及本地 state database 里的短会话预览；对应 rollout 尾部的
+`last_token_usage` 提供当前 context，累计 token bucket 提供 cache 命中率。Grok 的
+`signals.json`/`updates.jsonl` 提供模型、context 和 cache。没有证据的字段会隐藏，
 不会伪造 `cached expires`：
 
 ```text
-● Owner · Claude
+● Owner · Claude/Sonnet
   hi
-  context 23%
   cache 99.6% · ttl≈58m
+  context 23%
   5h 100% 3h07m · 7d 31% 2d3h
 ```
 
@@ -196,13 +197,14 @@ Agy 通过原生的一次性 `statusLine` hook 把额度 JSON 传给插件。配
 [ui.sidebar.agents]
 row_gap = 1 # herdr-agent-quota
 rows = [
-  ["state_icon", "tab", { token = "$quota_provider", bold = true, dim = false }, { token = "$quota_context", fg = "#9b8fd8", bold = true, dim = false }],
+  ["state_icon", "tab", { token = "$quota_provider_model", bold = true, dim = false }],
   [{ token = "$quota_topic", dim = false }],
   [
-    { token = "$quota_cache", fg = "#6fb5b7", bold = true, dim = false },
-    { token = "$quota_cache_ttl", fg = "#cdaa65", bold = true, dim = false },
+    { token = "$quota_cache", fg = "#9aa7b8", bold = true, dim = false },
+    { token = "$quota_cache_ttl", fg = "#9aa7b8", bold = true, dim = false },
     { token = "$quota_error", fg = "#ca6470", bold = true, dim = false },
   ],
+  [{ token = "$quota_context", fg = "#9aa7b8", bold = true, dim = false }],
   [
     { token = "$quota_5h_normal", fg = "#84b084", bold = true, dim = false },
     { token = "$quota_5h_warning", fg = "#cdaa65", bold = true, dim = false },
@@ -215,18 +217,33 @@ rows = [
 ```
 
 - `state_icon`、`tab` 是 Herdr 内置的状态和 plane 标签。
-- `$quota_provider` 是 `Claude`、`Codex`、`Grok` 或 `Agy`。
+- `$quota_provider_model` 是紧凑的 `Provider/Model` 身份标签，例如
+  `Claude/Sonnet`；模型不可用时只显示 provider 名称。`$quota_provider` 和
+  `$quota_model` 仍保留给自定义布局和旧配置使用。
+- provider 和 model 都按 session 保存，因此同一 provider 的多个 pane 也能显示各自模型；
+  Codex/Grok 的本地会话数据不可用时才隐藏 model。
 - 默认 provider 名称使用易辨识的柔和品牌色，并且不影响额度健康色：
   Claude 柔橘、Codex 粉彩蓝、Grok 柔白、Agy 使用 Antigravity 风格薄荷绿。
 - `$quota_topic` 放在额度上方，阅读顺序是 agent、当前任务、资源状态。
 - Codex 的空/默认 prompt 会回退为本地 app-server state database 的短会话预览；
   其他 provider 仍保持空白。
-- `$quota_context` 显示 provider 报告的 context **已用**百分比，并紧跟在 provider
-  名称后面。`$quota_cache` 是主 session transcript 的累计命中率，不是每一轮的比例；
+- Codex context 使用 rollout 的最新 `last_token_usage` 与模型窗口计算，cache 使用
+  session token counters；如果最新 cache-bearing rollout 事件有时间戳，`$quota_cache_ttl`
+  会显示按最长 1 小时保留上限计算的近似值，不冒充精确过期时间。Grok context 使用
+  `signals.json`，cache 使用最新 usage update。这些是本地诊断值，不是额度窗口百分比。
+- `$quota_context` 显示 provider 报告的 context **已用**百分比，位于倒数第二行、
+  额度 limit 行之前。`$quota_cache` 是主 session transcript 的累计命中率，不是每一轮的比例；
   固定保留一位小数，避免 `99.6%` 被显示成 `100%`。`$quota_cache_ttl` 是 Claude
-  提供 5m/1h 缓存桶时的剩余近似 TTL；TTL 归零时用红色 `$quota_error` 显示
-  `no cached`。两个 cache 值共用一行；字段缺失时隐藏，不做猜测。
-- context 行使用紫色强调色（`#9b8fd8`），与额度续航的绿/琥珀/红色区分开。
+  提供 5m/1h 缓存桶，或 Codex 有带时间戳的 cache-bearing rollout 事件时的剩余近似 TTL；
+  TTL 归零时用红色 `$quota_error` 显示 `no cached`。两个 cache 值共用一行；字段缺失时隐藏，
+  不做猜测。
+- provider 和 model 共用各自 provider 的品牌色，方便快速识别；cache、TTL 和 context
+  共用一套低饱和诊断色（`#9aa7b8`），只有额度 limit 和明确错误使用绿/琥珀/红色。
+- Grok 只有周额度，因此 `rows_by_agent.grok` 会把周 limit 放到 context 同一行，
+  避免右侧留下空位；其他 provider 仍保持 context 倒数第二行、limit 最后一行。
+- Claude/Agy 的 statusLine 诊断按 session 隔离，新 session 不会继承上一 session 的
+  cache/context。Codex/Grok 只读取可匹配的本地会话文件；每个 provider 的 session
+  诊断最多保留 128 条，watcher 每轮只读取一次 Herdr 元数据，不会让历史会话无限增长。
 - 每个窗口只发布一个样式 token。Herdr 会把同一行相邻 token 自动用 `·`
   分隔，并在 token 缺失时移除对应分隔符，所以 5h/7d 会紧凑地显示在一行，
   但仍各自保留颜色。颜色按额度续航动态判断，不再使用固定余额阈值：将剩余
@@ -263,13 +280,15 @@ Herdr plugin API 只支持文本 token，不能由插件向原生 Agent renderer
   [app-server JSON-RPC](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
   的 rate-limit 响应，并在同一进程里做一次有上限、只读 state database 的
   `thread/list` 获取会话预览，按窗口时长识别 5 小时和 7 天额度，不依赖
-  `primary`/`secondary` 的位置。不会 resume thread，也不读 rollout JSONL，因此不会
-  声称拿到了实时 context 百分比。只保留最多 50 个预览的首个非空行，并截断到 80 个
-  字符。API key 登录不会被误标记为 ChatGPT 订阅额度。
+  `primary`/`secondary` 的位置。对返回的 thread id 只读取匹配 rollout JSONL 的尾部：
+  `last_token_usage` 用于当前 context，累计 token bucket 用于 cache；不会 resume thread
+  或发起模型 turn。只保留最多 50 个预览的首个非空行，并截断到 80 个字符。API key
+  登录不会被误标记为 ChatGPT 订阅额度。
 - **Grok：** 在内存中读取本地 `~/.grok/auth.json` 登录 key，访问 Grok CLI
   使用的周额度接口。只有明确标记为 weekly 的响应才会接受。这是
   SuperGrok 订阅额度，不是 xAI 开发者/API team 账单。统一 watcher 配合原有
-  60 秒去抖查询额度，不会反复登录、刷新登录 key，也不会消耗对话 token。
+  60 秒去抖查询额度；另外有上限地读取最新会话的 `signals.json` 和 `updates.jsonl`
+  尾部，补充 model/context/cache，不会反复登录、刷新登录 key，也不会消耗对话 token。
 - **Claude Code：** 使用官方
   [`statusLine` JSON hook](https://code.claude.com/docs/en/statusline) 提供
   5 小时、7 天额度、context 已用百分比和最新缓存计数。原有 statusLine 会被备份、
@@ -277,6 +296,9 @@ Herdr plugin API 只支持文本 token，不能由插件向原生 Agent renderer
   间隔（默认 60 秒），因此空闲会话也会刷新绝对 reset 时间；用户已有的刷新间隔会
   保留。当输入提供 transcript 路径和 session id 时，采集器首次读取一次已有主会话
   并按 offset 增量累计，之后只读新增行；明确缓存桶才推断 `ttl≈...`，不联网、不发模型请求。
+- **OpenAI Codex：** 读取匹配 rollout 尾部的 token counters 与事件时间戳；最新一次
+  cache-bearing 事件按 OpenAI 的缓存保留说明显示最长 1 小时的本地近似 TTL，rollout
+  本身没有精确过期时间。[OpenAI prompt caching](https://openai.com/index/api-prompt-caching/)
 - **Agy/Antigravity：** 使用官方
   [`/usage` 和 statusline 文档](https://antigravity.google/docs/cli/commands/usage?app=antigravity-ide)
   中的 Gemini、第三方额度池、context 已用百分比和最新缓存计数。两个额度池同时存在时，
@@ -322,6 +344,10 @@ cargo build --release --locked
 [`docs/research/cache-observability-open-source.md`](docs/research/cache-observability-open-source.md)。
 Grok 调研记录见
 [`docs/research/codexbar-grok-usage.md`](docs/research/codexbar-grok-usage.md)，
+Codex/Grok 本地 context/cache 调研见
+[`docs/research/codex-grok-context-cache.md`](docs/research/codex-grok-context-cache.md)，
+issue #22 的显示与 session 设计见
+[`docs/research/issue-22-model-display.md`](docs/research/issue-22-model-display.md)，
 实现约定见
 [`docs/plans/herdr-agent-quota-implementation.md`](docs/plans/herdr-agent-quota-implementation.md)。
 

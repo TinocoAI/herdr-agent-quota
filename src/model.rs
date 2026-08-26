@@ -332,8 +332,21 @@ pub struct ProviderSnapshot {
     pub windows: Vec<UsageWindow>,
     #[serde(default)]
     pub context: Option<ContextUsage>,
+    /// Human-readable name of the model most recently reported by a provider.
+    ///
+    /// StatusLine providers also keep the per-session value below so panes
+    /// running the same provider can be distinguished from one another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default)]
     pub session_summaries: BTreeMap<String, String>,
+    #[serde(default)]
+    pub session_models: BTreeMap<String, String>,
+    /// Context/cache diagnostics keyed by the provider's session id. Keeping
+    /// this per session prevents one provider pane from displaying another
+    /// pane's local rollout usage.
+    #[serde(default)]
+    pub session_contexts: BTreeMap<String, ContextUsage>,
     /// Login identity the snapshot was fetched for (Grok `user_id`, Codex
     /// `tokens.account_id`). Used to drop another account's cached quota after
     /// `grok login` / Codex account switch. Absent on snapshots written before
@@ -350,7 +363,10 @@ impl ProviderSnapshot {
             fetched_at_unix,
             windows,
             context: None,
+            model: None,
             session_summaries: BTreeMap::new(),
+            session_models: BTreeMap::new(),
+            session_contexts: BTreeMap::new(),
             account_id: None,
         }
     }
@@ -358,6 +374,49 @@ impl ProviderSnapshot {
     pub fn with_context(mut self, context: Option<ContextUsage>) -> Self {
         self.context = context;
         self
+    }
+
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
+        self
+    }
+
+    /// Return the model for a pane's session, falling back to the latest
+    /// provider-level value for snapshots created before session tracking.
+    pub fn model_for_session(&self, session_id: Option<&str>) -> Option<&str> {
+        let Some(session_id) = session_id else {
+            return self.model.as_deref();
+        };
+        if let Some(model) = self.session_models.get(session_id) {
+            return Some(model);
+        }
+        if self.session_models.is_empty() {
+            self.model.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// Return context/cache diagnostics for a pane's session. A snapshot with
+    /// no per-session map is an older/provider-level observation, so it keeps
+    /// the historical global fallback for local providers. StatusLine
+    /// providers cannot safely use that fallback: an old Claude/Agy snapshot
+    /// may belong to a different pane session, so an unknown session is blank
+    /// until its own hook observation arrives.
+    pub fn context_for_session(&self, session_id: Option<&str>) -> Option<&ContextUsage> {
+        let Some(session_id) = session_id else {
+            return self.context.as_ref();
+        };
+        if let Some(context) = self.session_contexts.get(session_id) {
+            return Some(context);
+        }
+        if self.session_contexts.is_empty()
+            && !matches!(self.provider, Provider::Claude | Provider::Agy)
+        {
+            self.context.as_ref()
+        } else {
+            None
+        }
     }
 
     pub fn with_account_id(mut self, account_id: Option<String>) -> Self {
@@ -508,6 +567,17 @@ mod tests {
         let context: ContextUsage = serde_json::from_str(r#"{"used_percent":23.5}"#).unwrap();
         assert_eq!(context.used_percent, 23.5);
         assert!(context.cache.is_none());
+    }
+
+    #[test]
+    fn legacy_statusline_context_is_not_reused_for_an_unknown_session() {
+        let cache = CacheUsage::from_token_counts(10, 90, 0)
+            .unwrap()
+            .with_session_totals(CacheTotals::from_token_counts(10, 90, 0), "old-session", 0);
+        let snapshot = ProviderSnapshot::new(Provider::Claude, vec![], 0).with_context(Some(
+            ContextUsage::new(23.5).unwrap().with_cache(Some(cache)),
+        ));
+        assert!(snapshot.context_for_session(Some("new-session")).is_none());
     }
 
     #[test]
