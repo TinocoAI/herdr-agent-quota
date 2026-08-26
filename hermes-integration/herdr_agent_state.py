@@ -140,9 +140,10 @@ def _fetch_openrouter_credits() -> dict[str, str]:
 
 
 def _codex_quota_tokens() -> dict[str, str]:
-    """Reconstruct the same Codex sidebar tokens herdr-agent-quota writes
-    on a native codex pane, by reading its local snapshot file. This lets a
-    Codex model running *inside* Hermes show an identical quota row."""
+    """Reconstruct the exact Codex sidebar tokens herdr-agent-quota writes
+    on a native codex pane, by reading its local snapshot file. A Codex model
+    running *inside* Hermes must show an identical quota row — same tokens,
+    same strings, no extra OpenRouter credit info."""
     now = time.time()
     cached_at, cached = _codex_cache
     if now - cached_at < _CODEX_TTL and cached:
@@ -162,6 +163,8 @@ def _codex_quota_tokens() -> dict[str, str]:
         def duration_seconds(kind: str) -> int:
             return 5 * 3600 if kind == "five_hour" else 7 * 24 * 3600
 
+        # Severity is keyed on the *time* remaining vs the window length,
+        # matching herdr-agent-quota's Severity::for_window.
         def severity(remaining_pct: float, resets_at: int) -> str:
             remaining_seconds = max(resets_at - now_unix, 0)
             if remaining_seconds <= 0:
@@ -179,6 +182,8 @@ def _codex_quota_tokens() -> dict[str, str]:
 
         def fmt_reset(resets_at: int) -> str:
             secs = max(resets_at - now_unix, 0)
+            if secs == 0:
+                return "due"
             minutes = max(secs // 60, 1)
             if minutes >= 24 * 60:
                 return f"{minutes // (24 * 60)}d{minutes % (24 * 60) // 60}h"
@@ -186,16 +191,36 @@ def _codex_quota_tokens() -> dict[str, str]:
                 return f"{minutes // 60}h{minutes % 60:02d}"
             return f"{minutes}m"
 
+        # Match herdr-agent-quota's compact window string: "5h 42% reset 4h07m".
+        window_parts: list[str] = []
+        worst_sev = "normal"
         for w in snap.get("windows", []):
             kind = w.get("kind")
             remaining = float(w.get("remaining_percent", 0))
             resets = int(w.get("resets_at", 0))
             label = window_label(kind)
-            value = f"{label} {fmt_pct(remaining)}% {fmt_reset(resets)}"
+            value = f"{label} {fmt_pct(remaining)}% reset {fmt_reset(resets)}"
             sev = severity(remaining, resets)
             key = "5h" if label == "5h" else "week"
             result[f"quota_{key}"] = value
             result[f"quota_{key}_{sev}"] = value
+            window_parts.append(value)
+            if sev == "danger":
+                worst_sev = "danger"
+            elif sev == "warning" and worst_sev != "danger":
+                worst_sev = "warning"
+
+        # quota_summary joins both windows exactly like the Rust sidebar_summary.
+        if window_parts:
+            result["quota_summary"] = " · ".join(window_parts)
+
+        # quota_state is the global severity symbol (●/▲/!/?).
+        result["quota_state"] = {
+            "normal": "●",
+            "warning": "▲",
+            "danger": "!",
+            "unknown": "?",
+        }.get(worst_sev, "●")
 
         ctx = snap.get("context") or {}
         if ctx:
@@ -207,9 +232,11 @@ def _codex_quota_tokens() -> dict[str, str]:
             if ttl > 0:
                 result["quota_cache_ttl"] = f"ttl≈{fmt_reset(int(now_unix + ttl))}"
 
-        model = snap.get("model") or "Codex"
+        # quota_provider_model carries the "Codex/<model>" prefix, identical
+        # to herdr-agent-quota's provider_model_label.
+        model = snap.get("model") or ""
         result["quota_provider"] = "Codex"
-        result["quota_provider_model"] = model
+        result["quota_provider_model"] = f"Codex/{model}" if model else "Codex"
 
         # Latest session summary as the topic, matching the codex pane.
         summaries = snap.get("session_summaries") or {}
@@ -228,20 +255,15 @@ def _build_tokens(model_override: str | None = None) -> dict[str, str]:
         "quota_provider_model": model,
         "quota_provider": _provider_short_for(model),
     }
-    if _uses_openrouter(model):
-        tokens.update(_fetch_openrouter_credits())
-    elif _is_codex(model):
+    if _is_codex_model(model):
         tokens.update(_codex_quota_tokens())
+    elif _uses_openrouter(model):
+        tokens.update(_fetch_openrouter_credits())
     return tokens
 
 
 def _is_codex(model: str) -> bool:
-    label = model.lower()
-    return (
-        label == "gpt-5.6-luna"
-        or label.startswith("codex")
-        or "codex" in label
-    )
+    return _is_codex_model(model)
 
 
 def _provider_short_for(model: str) -> str:
@@ -257,9 +279,25 @@ def _provider_short_for(model: str) -> str:
     return "Hermes"
 
 
+def _is_codex_model(model: str) -> bool:
+    """True for ChatGPT/Codex subscription models.
+
+    These carry no OpenRouter credit balance, so they must be tested before
+    the OpenRouter check (a model id like `gpt-5.6-luna` still contains a
+    "/", which would otherwise be mistaken for an OpenRouter route)."""
+    label = model.lower()
+    return (
+        label == "gpt-5.6-luna"
+        or label.startswith("codex")
+        or "codex" in label
+    )
+
+
 def _uses_openrouter(model: str | None = None) -> bool:
     """True when the active inference backend is OpenRouter (credits apply)."""
     label = (model or _model_label()).lower()
+    if _is_codex_model(label):
+        return False
     if "openrouter" in label:
         return True
     # model id like "tencent/hy3" is served through OpenRouter.
@@ -281,6 +319,8 @@ def _report_metadata(pane_id: str, model: str | None = None) -> None:
     all_quota_tokens = {
         "quota_provider",
         "quota_provider_model",
+        "quota_state",
+        "quota_summary",
         "quota_credits",
         "quota_credits_pct",
         "quota_5h",
