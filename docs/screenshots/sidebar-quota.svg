@@ -11,19 +11,19 @@
     <g>
       <rect x="20" y="160" width="320" height="120" rx="6" fill="#1b1e25"/>
       <text x="36" y="187" fill="#94a0b3" font-size="11">● Owner · Codex</text>
-      <text x="36" y="216" fill="#e8edf7" font-size="15" font-weight="700">week 86%</text>
+      <text x="36" y="216" fill="#e8edf7" font-size="15" font-weight="700">7d 86%</text>
       <text x="36" y="245" fill="#94a0b3" font-size="13">ti</text>
       <rect x="20" y="296" width="320" height="120" rx="6" fill="#1b1e25"/>
       <text x="36" y="323" fill="#94a0b3" font-size="11">● Owner · Grok</text>
-      <text x="36" y="352" fill="#e8edf7" font-size="15" font-weight="700">week 21%</text>
+      <text x="36" y="352" fill="#e8edf7" font-size="15" font-weight="700">7d 21%</text>
       <text x="36" y="381" fill="#94a0b3" font-size="13">B-325 budget cap</text>
       <rect x="20" y="432" width="320" height="120" rx="6" fill="#1b1e25"/>
       <text x="36" y="459" fill="#94a0b3" font-size="11">● Owner · Claude</text>
-      <text x="36" y="488" fill="#e8edf7" font-size="15" font-weight="700">5h 95% · week 73%</text>
+      <text x="36" y="488" fill="#e8edf7" font-size="15" font-weight="700">5h 95% · 7d 73%</text>
       <text x="36" y="517" fill="#94a0b3" font-size="13">refactor auth</text>
       <rect x="20" y="568" width="320" height="120" rx="6" fill="#1b1e25"/>
       <text x="36" y="595" fill="#94a0b3" font-size="11">● Owner · Agy</text>
-      <text x="36" y="624" fill="#e8edf7" font-size="15" font-weight="700">5h 99.7% · week 99.7%</text>
+      <text x="36" y="624" fill="#e8edf7" font-size="15" font-weight="700">5h 99.7% · 7d 99.7%</text>
       <text x="36" y="653" fill="#94a0b3" font-size="13">model check</text>
     </g>
     <text x="28" y="740" fill="#94a0b3" font-size="12">three readable rows · live CLI topic</text>
@@ -34,9 +34,9 @@
     <rect x="458" y="212" width="868" height="1" fill="#48505e"/>
     <g>
       <rect x="458" y="236" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="236" width="7" height="84" rx="3" fill="#5cd18e"/>
-      <text x="486" y="274" fill="#e8edf7" font-size="17" font-weight="700">Codex</text><text x="620" y="274" fill="#94a0b3" font-size="13">ChatGPT subscription</text><text x="1030" y="274" fill="#94a0b3" font-size="12">week</text><text x="1160" y="274" fill="#5cd18e" font-size="14" font-weight="700">86% left</text>
+      <text x="486" y="274" fill="#e8edf7" font-size="17" font-weight="700">Codex</text><text x="620" y="274" fill="#94a0b3" font-size="13">ChatGPT subscription</text><text x="1030" y="274" fill="#94a0b3" font-size="12">7d</text><text x="1160" y="274" fill="#5cd18e" font-size="14" font-weight="700">86% left</text>
       <rect x="458" y="340" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="340" width="7" height="84" rx="3" fill="#f0ad40"/>
-      <text x="486" y="378" fill="#e8edf7" font-size="17" font-weight="700">Grok</text><text x="620" y="378" fill="#94a0b3" font-size="13">SuperGrok</text><text x="1030" y="378" fill="#94a0b3" font-size="12">week</text><text x="1160" y="378" fill="#f0ad40" font-size="14" font-weight="700">21% left</text>
+      <text x="486" y="378" fill="#e8edf7" font-size="17" font-weight="700">Grok</text><text x="620" y="378" fill="#94a0b3" font-size="13">SuperGrok</text><text x="1030" y="378" fill="#94a0b3" font-size="12">7d</text><text x="1160" y="378" fill="#f0ad40" font-size="14" font-weight="700">21% left</text>
       <rect x="458" y="444" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="444" width="7" height="84" rx="3" fill="#5cd18e"/>
       <text x="486" y="482" fill="#e8edf7" font-size="17" font-weight="700">Claude</text><text x="620" y="482" fill="#94a0b3" font-size="13">Claude Code</text><text x="1020" y="482" fill="#94a0b3" font-size="12">5h + weekly</text><text x="1160" y="482" fill="#5cd18e" font-size="14" font-weight="700">95% · 73% left</text>
       <rect x="458" y="548" width="868" height="84" rx="6" fill="#1c2026"/><rect x="458" y="548" width="7" height="84" rx="3" fill="#5cd18e"/>

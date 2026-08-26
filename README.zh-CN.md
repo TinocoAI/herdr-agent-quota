@@ -149,8 +149,8 @@ usage、topic 三类 token，不会覆盖官方 agent 指示。卸载 action 会
 | --- | --- | --- | --- |
 | Claude Code | model + `5h` + `7d` + context + 缓存命中率/近似 TTL | 官方 `statusLine` JSON：`model`、`rate_limits`、`context_window`、`transcript_path` | 配置 action 自动安装/串联，并保持原生刷新间隔与 watcher 一致 |
 | OpenAI Codex | model + `5h` + `7d` + context + cache + 近似 TTL + 本地会话摘要 | 一次性的 `codex app-server --stdio`，加上按 thread 匹配的 `~/.codex` rollout 尾部 | 使用 ChatGPT 订阅登录；API key 模式显示为不可用；不会 resume thread |
-| Grok CLI / Grok Build | model + `week` + context + cache | `~/.grok/auth.json` 额度接口，加上有上限的 `signals.json`/`updates.jsonl` 会话元数据 | 由统一 watcher 处理，不再安装回复 hook |
-| Agy / Antigravity CLI | model + `5h` + `week` + context + 缓存命中率 | 官方 `statusLine` JSON 的 `model`、`quota` 和 `context_window` | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
+| Grok CLI / Grok Build | model + `7d` + context + cache | `~/.grok/auth.json` 额度接口，加上有上限的 `signals.json`/`updates.jsonl` 会话元数据 | 由统一 watcher 处理，不再安装回复 hook |
+| Agy / Antigravity CLI | model + `5h` + `7d` + context + 缓存命中率 | 官方 `statusLine` JSON 的 `model`、`quota` 和 `context_window` | 配置 action 自动安装并串联原命令；turn 中由统一 watcher 发布缓存 |
 
 侧栏显示的是**额度剩余百分比**和距离下次额度重置的时间，不是额度 token 数量。
 Claude 的两个窗口会用紧凑的 `5h` 和 `7d` 标签放在同一行，但仍各自保留动态健康色。
@@ -220,8 +220,9 @@ rows = [
 - `$quota_provider_model` 是紧凑的 `Provider/Model` 身份标签，例如
   `Claude/Sonnet`；模型不可用时只显示 provider 名称。`$quota_provider` 和
   `$quota_model` 仍保留给自定义布局和旧配置使用。
-- provider 和 model 都按 session 保存，因此同一 provider 的多个 pane 也能显示各自模型；
-  Codex/Grok 的本地会话数据不可用时才隐藏 model。
+- provider 和 model 都按 session 保存，因此同一 provider 的多个 pane 也能显示各自模型。
+  如果 Herdr 没有提供 pane 的 session id，可以保留 provider 级 model，但会隐藏
+  context/cache，避免把另一会话的诊断广播过来。
 - 默认 provider 名称使用易辨识的柔和品牌色，并且不影响额度健康色：
   Claude 柔橘、Codex 粉彩蓝、Grok 柔白、Agy 使用 Antigravity 风格薄荷绿。
 - `$quota_topic` 放在额度上方，阅读顺序是 agent、当前任务、资源状态。
@@ -242,8 +243,9 @@ rows = [
 - Grok 只有周额度，因此 `rows_by_agent.grok` 会把周 limit 放到 context 同一行，
   避免右侧留下空位；其他 provider 仍保持 context 倒数第二行、limit 最后一行。
 - Claude/Agy 的 statusLine 诊断按 session 隔离，新 session 不会继承上一 session 的
-  cache/context。Codex/Grok 只读取可匹配的本地会话文件；每个 provider 的 session
-  诊断最多保留 128 条，watcher 每轮只读取一次 Herdr 元数据，不会让历史会话无限增长。
+  cache/context。Codex/Grok 只读取可匹配的本地会话文件；如果 pane 没有 session id，
+  会先隐藏本地 context/cache，直到能匹配当前会话。每个 provider 的 session 诊断最多
+  保留 128 条，watcher 每轮只读取一次 Herdr 元数据，不会让历史会话无限增长。
 - 每个窗口只发布一个样式 token。Herdr 会把同一行相邻 token 自动用 `·`
   分隔，并在 token 缺失时移除对应分隔符，所以 5h/7d 会紧凑地显示在一行，
   但仍各自保留颜色。颜色按额度续航动态判断，不再使用固定余额阈值：将剩余

@@ -447,8 +447,7 @@ fn tokens_for_provider(
     now_unix: u64,
     session_id: Option<&str>,
 ) -> Option<MetadataTokens> {
-    snapshot
-        .map(|snapshot| MetadataTokens::from_snapshot_for_session(snapshot, now_unix, session_id))
+    snapshot.map(|snapshot| MetadataTokens::from_snapshot_for_pane(snapshot, now_unix, session_id))
 }
 
 fn tokens_for_loaded_snapshot(

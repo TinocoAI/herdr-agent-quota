@@ -26,6 +26,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   row, and Claude/Agy statusLine diagnostics are keyed by session so a fresh
   session cannot inherit another session's cache. All per-session maps are
   bounded to 128 entries.
+- A pane without a Herdr session id no longer receives provider-global
+  context/cache diagnostics. This prevents a fresh Grok or Agy pane from
+  showing another session's cached usage; diagnostics appear once the current
+  session can be matched. Weekly labels use the compact `7d` form everywhere.
 - Quota rows now show compact `5h`/`7d` window labels with minutes below one
   hour, hours and minutes below one day, and days plus hours for longer windows.
 - Cache hit rate and remaining cache TTL now share one short, color-separated
@@ -84,8 +88,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Expired cache TTL estimates now render as a red `no cached` diagnostic, and
   Claude payloads without quota fields clear stale window values instead of
   leaving an old weekly reset on the sidebar.
-- Weekly-only providers now use the readable `week ... reset ...` label; the
-  compact `5h`/`7d` form remains for providers that expose both windows.
+- Weekly windows now use the compact `7d ... reset ...` label, including
+  weekly-only providers, so narrow sidebars do not truncate the label.
 - Grok local-session enrichment now checks only the pane-matched two-level
   session paths, with a bounded newest-session fallback for direct refreshes;
   it no longer recursively scans the entire historical session tree.

@@ -92,13 +92,13 @@ impl CacheStore {
         if let Some(previous) = self.load(snapshot.provider).ok().flatten() {
             let same_account = snapshot.account_id == previous.account_id;
             if same_account {
-                if snapshot.context.is_none() {
-                    snapshot.context = previous.context.clone();
-                }
-                if snapshot.model.is_none() {
-                    snapshot.model = previous.model.clone();
-                }
                 if session_ids.is_empty() {
+                    if snapshot.context.is_none() {
+                        snapshot.context = previous.context.clone();
+                    }
+                    if snapshot.model.is_none() {
+                        snapshot.model = previous.model.clone();
+                    }
                     if snapshot.session_contexts.is_empty() {
                         for (session_id, context) in previous.session_contexts {
                             snapshot
@@ -783,6 +783,27 @@ mod tests {
         assert_eq!(saved.model.as_deref(), Some("grok-4.6"));
         assert_eq!(saved.session_models["session-1"], "grok-4.6");
         assert!(saved.session_contexts.contains_key("session-1"));
+    }
+
+    #[test]
+    fn direct_provider_refresh_does_not_leak_global_context_to_a_new_session() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+        let previous = snapshot().with_context(Some(
+            ContextUsage::new(24.0).unwrap().with_cache(Some(
+                CacheUsage::from_token_counts(10, 90, 0)
+                    .unwrap()
+                    .with_session_totals(None, "old-session", 0),
+            )),
+        ));
+        cache.save(&previous).unwrap();
+
+        let mut latest = snapshot();
+        cache
+            .save_preserving_diagnostics_for_sessions(&mut latest, &["new-session".to_string()])
+            .unwrap();
+        let saved = cache.load(Provider::Grok).unwrap().unwrap();
+        assert!(saved.context_for_session(Some("new-session")).is_none());
     }
 
     #[test]
