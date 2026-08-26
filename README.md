@@ -21,9 +21,10 @@ Agy/Antigravity subscription usage, in Herdr's agent sidebar.
 
 ![Live Herdr agent sidebar](docs/screenshots/herdr-sidebar-live.png)
 
-*A real Herdr workspace: Claude and Codex show five-hour and weekly reset ETAs
-on one compact row, Grok shows its weekly window beside context, and each agent card uses
-the latest user prompt rather than an AI-generated status.*
+*A current Herdr workspace: Claude and Codex show five-hour and weekly reset
+ETAs on one compact row, Grok keeps its `7d` window clean when Herdr has no
+session id, and Agy shows model/context/cache data from its matching statusLine
+session. Each card uses the latest user prompt rather than an AI-generated status.*
 
 - **Four providers, one sidebar** — Claude Code, OpenAI Codex, Grok, and
   Agy/Antigravity.
