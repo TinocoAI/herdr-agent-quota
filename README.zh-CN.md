@@ -21,9 +21,9 @@ Claude Code、Codex、Grok 和 Agy/Antigravity 的订阅额度。
 
 ![Herdr 左侧额度截图](docs/screenshots/herdr-sidebar-live.png)
 
-*真实的 Herdr 工作区：Claude 和 Codex 在一行紧凑显示 5 小时和 7 天额度及其重置倒计时，
-Grok 把周额度放在 context 旁边；每张 agent 卡片的话题来自用户最后一次输入，
-不会使用 AI 生成的状态标题。*
+*最新的 Herdr 工作区：Claude 和 Codex 在一行紧凑显示 5 小时和 7 天额度及其重置倒计时；
+Grok 在 Herdr 没有提供 session id 时保持 `7d` 干净，Agy 则从匹配的 statusLine
+会话显示 model/context/cache；每张 agent 卡片的话题来自用户最后一次输入，不会使用 AI 生成的状态标题。*
 
 - **四个 provider，一个侧栏** —— Claude Code、OpenAI Codex、Grok、Agy/Antigravity。
 - **按能力显示的紧凑卡片** —— provider、当前输入/会话摘要、可用的 context
