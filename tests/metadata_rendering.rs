@@ -15,6 +15,6 @@ fn agent_row_renders_compact_reset_eta_without_absolute_timestamp() {
     );
     assert_eq!(
         render_provider(Provider::Grok, Some(&snapshot), 0),
-        "Grok WARN\r\n  week 21% left reset 2d3h"
+        "Grok WARN\r\n  7d 21% left reset 2d3h"
     );
 }

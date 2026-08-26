@@ -450,12 +450,13 @@ fn statusline_without_context_keeps_the_last_context_snapshot() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(
         state.path(),
-        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1"}]}}"#,
+        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","agent_session":{"value":"session-1"}}]}}"#,
     );
     run_claude_collector(
         state.path(),
         &herdr_stub,
         br#"{
+            "session_id": "session-1",
             "context_window": {"used_percentage": 23.5},
             "rate_limits": {"seven_day": {"used_percentage": 27.0}}
         }"#,
@@ -463,13 +464,13 @@ fn statusline_without_context_keeps_the_last_context_snapshot() {
     run_claude_collector(
         state.path(),
         &herdr_stub,
-        br#"{"rate_limits":{"seven_day":{"used_percentage":28.0}}}"#,
+        br#"{"session_id":"session-1","rate_limits":{"seven_day":{"used_percentage":28.0}}}"#,
     );
 
     run_claude_refresh(state.path(), &herdr_stub);
     let report = fs::read_to_string(herdr_log).unwrap();
     assert!(report.contains("quota_context=context 24%"));
-    assert!(report.contains("quota_week=week 72%"));
+    assert!(report.contains("quota_week=7d 72%"));
 }
 
 #[test]
@@ -597,7 +598,7 @@ fn claude_collector_does_not_republish_unchanged_quota() {
     let state = tempdir().unwrap();
     let (herdr_stub, herdr_log) = install_herdr_stub(
         state.path(),
-        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","tokens":{"quota_state":"?","quota_provider":"Claude","quota_provider_model":"Claude","quota_5h":"5h 42%","quota_5h_warning":"5h 42%","quota_week":"7d 73%","quota_week_warning":"7d 73%","quota_summary":"5h 42% · week 73%"}}]}}"#,
+        r#"{"result":{"agents":[{"agent":"claude","pane_id":"w1:p1","tokens":{"quota_state":"?","quota_provider":"Claude","quota_provider_model":"Claude","quota_5h":"5h 42%","quota_5h_warning":"5h 42%","quota_week":"7d 73%","quota_week_warning":"7d 73%","quota_summary":"5h 42% · 7d 73%"}}]}}"#,
     );
 
     let input = br#"{

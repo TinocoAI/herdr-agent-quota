@@ -104,7 +104,7 @@ mod tests {
         let rendered = render_provider(Provider::Claude, Some(&snapshot), 0);
         assert_eq!(
             rendered,
-            "Claude WARN\r\n  5h 42% left reset 4h07m · week 73% left reset 2d3h"
+            "Claude WARN\r\n  5h 42% left reset 4h07m · 7d 73% left reset 2d3h"
         );
     }
 

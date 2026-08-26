@@ -178,8 +178,8 @@ long turns no longer start one refresh command per tool call.
 | --- | --- | --- | --- |
 | Claude Code | model + `5h` + `7d` + context + cache hit/approx. TTL | Official `statusLine` JSON: `model`, `rate_limits`, `context_window`, and `transcript_path` | The configure action installs/chains it and keeps its refresh interval current |
 | OpenAI Codex | model + `5h` + `7d` + context + cache + approx. TTL + local session summary | One-shot local `codex app-server --stdio` plus a bounded tail read of matching `~/.codex` rollout JSONL | ChatGPT subscription login; API-key mode is shown as unavailable |
-| Grok CLI / Grok Build | model + `week` + context + cache | Local `~/.grok/auth.json` billing plus bounded reads of `signals.json`/`updates.jsonl` session metadata | Covered by the unified watcher; no response hook is installed |
-| Agy / Antigravity CLI | model + `5h` + `week` + context + cache hit | Official `statusLine` JSON: `model`, `quota`, and `context_window` | The configure action installs and chains it automatically |
+| Grok CLI / Grok Build | model + `7d` + context + cache | Local `~/.grok/auth.json` billing plus bounded reads of `signals.json`/`updates.jsonl` session metadata | Covered by the unified watcher; no response hook is installed |
+| Agy / Antigravity CLI | model + `5h` + `7d` + context + cache hit | Official `statusLine` JSON: `model`, `quota`, and `context_window` | The configure action installs and chains it automatically |
 
 The sidebar shows **percentage remaining** and the time until each quota reset,
 not quota token counts. The two Claude windows use compact `5h` and `7d`
@@ -203,7 +203,7 @@ turn, one short-lived global watcher polls once per configured interval,
 coalesces active fetches, and exits when all selected providers settle. The
 sidebar does not run a permanent daemon.
 
-Grok has only a weekly quota window, so its provider-specific row places that
+Grok has only a weekly quota window (`7d`), so its provider-specific row places that
 limit beside context instead of leaving an empty slot on the right.
 
 A failed refresh never replaces a successful cached value with `unavailable`;
@@ -253,8 +253,9 @@ rows = [
   provider name. `$quota_provider` and `$quota_model` remain available for
   custom layouts and older configurations.
 - Model and provider values are tracked per session, so same-provider panes can
-  show different models; Codex and Grok hide the model only when their local
-  session data is unavailable.
+  show different models. If Herdr cannot identify a pane's session, the
+  provider-level model may remain visible, but context/cache diagnostics stay
+  hidden instead of broadcasting another session's values.
 - Default provider labels use recognizable brand colors without affecting quota
   health: Claude soft orange, Codex pastel blue, Grok soft white, and an
   Antigravity-inspired mint for Agy.
@@ -287,9 +288,11 @@ rows = [
   final row.
 - Claude and Agy statusLine diagnostics are keyed by session. A new session
   starts without the previous session's cache/context values; Codex and Grok
-  read only visible session files. Per-session diagnostic maps are capped at
-  128 entries, and the watcher uses one metadata-only Herdr inventory call per
-  poll, so historical sessions cannot grow memory without bound.
+  read only visible session files. If Herdr exposes no session id for a pane,
+  local context/cache values are hidden until one is available. Per-session
+  diagnostic maps are capped at 128 entries, and the watcher uses one
+  metadata-only Herdr inventory call per poll, so historical sessions cannot
+  grow memory without bound.
 - Each window publishes exactly one styled variant. Herdr renders adjacent
   values on the same row with `·` separators and removes separators for missing
   values, so 5h/7d stay compact while retaining independent colors. Color

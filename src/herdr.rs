@@ -801,12 +801,12 @@ mod tests {
         insert_severity_token(
             &mut tokens,
             "quota_week",
-            "week 25% reset 2d3h",
+            "7d 25% reset 2d3h",
             Some(crate::model::Severity::Warning),
         );
         assert_eq!(
             tokens.get("quota_week_warning").map(String::as_str),
-            Some("week 25% reset 2d3h")
+            Some("7d 25% reset 2d3h")
         );
         assert!(!tokens.contains_key("quota_week_normal"));
         assert!(!tokens.contains_key("quota_week_danger"));

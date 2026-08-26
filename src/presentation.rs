@@ -31,11 +31,40 @@ impl MetadataTokens {
         now_unix: u64,
         session_id: Option<&str>,
     ) -> Self {
+        Self::from_snapshot_parts(
+            snapshot,
+            now_unix,
+            snapshot.model_for_session(session_id),
+            snapshot.context_for_session(session_id),
+        )
+    }
+
+    /// Render a pane's tokens without broadcasting provider-local diagnostics
+    /// when Herdr cannot identify that pane's session. A provider-level model
+    /// is still useful for the identity row, but context/cache values are
+    /// session data and must stay blank until their session id is known.
+    pub fn from_snapshot_for_pane(
+        snapshot: &ProviderSnapshot,
+        now_unix: u64,
+        session_id: Option<&str>,
+    ) -> Self {
+        let quota_model = match session_id {
+            Some(session_id) => snapshot.model_for_session(Some(session_id)),
+            None => snapshot.model.as_deref(),
+        };
+        let context =
+            session_id.and_then(|session_id| snapshot.context_for_session(Some(session_id)));
+        Self::from_snapshot_parts(snapshot, now_unix, quota_model, context)
+    }
+
+    fn from_snapshot_parts(
+        snapshot: &ProviderSnapshot,
+        now_unix: u64,
+        model: Option<&str>,
+        context: Option<&crate::model::ContextUsage>,
+    ) -> Self {
         let quota_provider = snapshot.provider.display_name().to_string();
-        let quota_model = snapshot
-            .model_for_session(session_id)
-            .unwrap_or_default()
-            .to_string();
+        let quota_model = model.unwrap_or_default().to_string();
         Self {
             quota_state: snapshot.severity(now_unix).symbol().to_string(),
             quota_icon: snapshot.provider.icon().to_string(),
@@ -48,10 +77,10 @@ impl MetadataTokens {
             quota_week: sidebar_window(snapshot, WindowKind::Weekly, now_unix),
             quota_week_severity: window_severity(snapshot, WindowKind::Weekly, now_unix),
             quota_summary: sidebar_summary(snapshot, now_unix),
-            quota_context: sidebar_context(snapshot.context_for_session(session_id)),
-            quota_cache: sidebar_cache(snapshot.context_for_session(session_id)),
-            quota_cache_ttl: sidebar_cache_ttl(snapshot.context_for_session(session_id), now_unix),
-            quota_error: sidebar_cache_error(snapshot.context_for_session(session_id), now_unix),
+            quota_context: sidebar_context(context),
+            quota_cache: sidebar_cache(context),
+            quota_cache_ttl: sidebar_cache_ttl(context, now_unix),
+            quota_error: sidebar_cache_error(context, now_unix),
         }
     }
 
@@ -265,11 +294,11 @@ mod tests {
         );
         assert_eq!(
             sidebar_summary(&snapshot, 0),
-            "5h 42% reset 4h07m · week 73% reset 2d3h"
+            "5h 42% reset 4h07m · 7d 73% reset 2d3h"
         );
         assert_eq!(
             dashboard_summary(&snapshot, 0),
-            "5h 42% left reset 4h07m · week 73% left reset 2d3h"
+            "5h 42% left reset 4h07m · 7d 73% left reset 2d3h"
         );
     }
 
@@ -278,7 +307,7 @@ mod tests {
         let five_hour = format_window(&window(WindowKind::FiveHour, 57.0, 14_820), 0, false);
         let weekly = format_window(&window(WindowKind::Weekly, 75.0, 183_600), 0, false);
         assert_eq!(five_hour, "5h 43% reset 4h07m");
-        assert_eq!(weekly, "week 25% reset 2d3h");
+        assert_eq!(weekly, "7d 25% reset 2d3h");
     }
 
     #[test]
@@ -372,6 +401,23 @@ mod tests {
     }
 
     #[test]
+    fn pane_without_session_id_does_not_broadcast_local_diagnostics() {
+        let snapshot = ProviderSnapshot::new(Provider::Grok, vec![], 0)
+            .with_model(Some("grok-4.6".to_string()))
+            .with_context(Some(
+                crate::model::ContextUsage::new(43.2)
+                    .unwrap()
+                    .with_cache(crate::model::CacheUsage::from_token_counts(200, 800, 100)),
+            ));
+        let values = MetadataTokens::from_snapshot_for_pane(&snapshot, 0, None);
+        assert_eq!(values.quota_provider_model, "Grok/grok-4.6");
+        assert_eq!(values.quota_context, "");
+        assert_eq!(values.quota_cache, "");
+        assert_eq!(values.quota_cache_ttl, "");
+        assert_eq!(values.quota_error, None);
+    }
+
+    #[test]
     fn metadata_formats_session_cache_hit_rate_and_approximate_ttl() {
         let cache = crate::model::CacheUsage::from_token_counts(100, 800, 100)
             .unwrap()
@@ -449,7 +495,7 @@ mod tests {
             0,
         );
         let values = MetadataTokens::from_snapshot(&snapshot, 0);
-        assert_eq!(values.quota_week, "week 69% reset 6d0h");
+        assert_eq!(values.quota_week, "7d 69% reset 6d0h");
     }
 
     #[test]

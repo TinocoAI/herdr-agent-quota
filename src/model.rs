@@ -79,7 +79,7 @@ impl WindowKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::FiveHour => "5h",
-            Self::Weekly => "week",
+            Self::Weekly => "7d",
         }
     }
 
@@ -381,8 +381,8 @@ impl ProviderSnapshot {
         self
     }
 
-    /// Return the model for a pane's session, falling back to the latest
-    /// provider-level value for snapshots created before session tracking.
+    /// Return the model for a pane's session. A known session never falls back
+    /// to provider-level data, because that value may belong to another pane.
     pub fn model_for_session(&self, session_id: Option<&str>) -> Option<&str> {
         let Some(session_id) = session_id else {
             return self.model.as_deref();
@@ -390,19 +390,13 @@ impl ProviderSnapshot {
         if let Some(model) = self.session_models.get(session_id) {
             return Some(model);
         }
-        if self.session_models.is_empty() {
-            self.model.as_deref()
-        } else {
-            None
-        }
+        None
     }
 
-    /// Return context/cache diagnostics for a pane's session. A snapshot with
-    /// no per-session map is an older/provider-level observation, so it keeps
-    /// the historical global fallback for local providers. StatusLine
-    /// providers cannot safely use that fallback: an old Claude/Agy snapshot
-    /// may belong to a different pane session, so an unknown session is blank
-    /// until its own hook observation arrives.
+    /// Return context/cache diagnostics for a pane's session. A known session
+    /// never falls back to provider-level data, because an older snapshot may
+    /// belong to another pane. The global value is used only when the caller
+    /// has no session id at all.
     pub fn context_for_session(&self, session_id: Option<&str>) -> Option<&ContextUsage> {
         let Some(session_id) = session_id else {
             return self.context.as_ref();
@@ -410,13 +404,7 @@ impl ProviderSnapshot {
         if let Some(context) = self.session_contexts.get(session_id) {
             return Some(context);
         }
-        if self.session_contexts.is_empty()
-            && !matches!(self.provider, Provider::Claude | Provider::Agy)
-        {
-            self.context.as_ref()
-        } else {
-            None
-        }
+        None
     }
 
     pub fn with_account_id(mut self, account_id: Option<String>) -> Self {
@@ -578,6 +566,24 @@ mod tests {
             ContextUsage::new(23.5).unwrap().with_cache(Some(cache)),
         ));
         assert!(snapshot.context_for_session(Some("new-session")).is_none());
+    }
+
+    #[test]
+    fn legacy_local_context_is_not_reused_for_an_unknown_session() {
+        let cache = CacheUsage::from_token_counts(10, 90, 0)
+            .unwrap()
+            .with_session_totals(CacheTotals::from_token_counts(10, 90, 0), "old-session", 0);
+        for provider in [Provider::Codex, Provider::Grok] {
+            let snapshot = ProviderSnapshot::new(provider, vec![], 0).with_context(Some(
+                ContextUsage::new(23.5)
+                    .unwrap()
+                    .with_cache(Some(cache.clone())),
+            ));
+            assert!(
+                snapshot.context_for_session(Some("new-session")).is_none(),
+                "{provider:?} leaked provider-level context into a new session"
+            );
+        }
     }
 
     #[test]
