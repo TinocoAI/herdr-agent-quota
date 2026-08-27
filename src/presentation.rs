@@ -76,18 +76,46 @@ impl MetadataTokens {
         context: Option<&crate::model::ContextUsage>,
     ) -> Self {
         let quota_provider = snapshot.provider.display_name().to_string();
-        let quota_model = model.unwrap_or_default().to_string();
         let credits = snapshot.credits.as_ref();
-        // When Hermes proxies Codex, show the exact same identity label a
-        // native Codex pane would ("Codex/<model>") so the two are
-        // indistinguishable in the sidebar.
-        let quota_provider_model = if matches!(snapshot.provider, Provider::Hermes)
-            && quota_model.to_ascii_lowercase().starts_with("codex/")
-        {
-            quota_model.clone()
+        // Hermes is a meta-provider: it proxies either OpenRouter (credit) or a
+        // Codex subscription (usage windows). Surface the *backend* name in the
+        // identity row instead of the literal model id, and put the bare model
+        // id in a dedicated row so each backend reads cleanly:
+        //
+        //   Hermes/OpenRouter  ->  `Hermes/openrouter`  + row  `poolside/...`
+        //   Hermes/Codex proxy ->  `Hermes/Codex`       + row  `gpt-5.6-luna`
+        //   native Codex       ->  `Codex/<model>`      (model already row1)
+        let mut quota_model: String;
+        let mut quota_provider_model: String;
+        let is_codex_proxy = matches!(snapshot.provider, Provider::Hermes)
+            && credits.is_none()
+            && snapshot.window(WindowKind::FiveHour).is_some();
+        if matches!(snapshot.provider, Provider::Hermes) {
+            let backend = if is_codex_proxy {
+                "Codex"
+            } else {
+                "openrouter"
+            };
+            quota_provider_model = format!("{quota_provider}/{backend}");
+            // Strip the `Codex/` prefix the proxy stamps on the model so the
+            // model row carries the bare id (e.g. `gpt-5.6-luna`).
+            let bare_model = model
+                .and_then(|m| m.strip_prefix("Codex/").or(Some(m)))
+                .filter(|m| !m.is_empty())
+                .map(str::to_string)
+                .unwrap_or_default();
+            quota_model = bare_model;
         } else {
-            provider_model_label(&quota_provider, &quota_model)
-        };
+            // Only the native Codex identity row already carries the model; for
+            // every other provider the model row stays populated as before.
+            let provider_model = model.unwrap_or_default().to_string();
+            quota_model = if matches!(snapshot.provider, Provider::Codex) {
+                String::new()
+            } else {
+                provider_model.clone()
+            };
+            quota_provider_model = provider_model_label(&quota_provider, &provider_model);
+        }
         Self {
             quota_state: snapshot.severity(now_unix).symbol().to_string(),
             quota_icon: snapshot.provider.icon().to_string(),

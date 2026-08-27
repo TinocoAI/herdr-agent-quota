@@ -261,6 +261,33 @@ fn provider_model_is_compact_and_grok_merges_weekly_limit_into_context_row() {
 }
 
 #[test]
+fn hermes_theme_gains_a_dedicated_model_row_after_the_identity_row() {
+    let applied =
+        add_quota_row("[ui.sidebar.agents]\nrows = [[\"state_icon\", \"agent\"]]\n").unwrap();
+    let document = applied.parse::<toml_edit::DocumentMut>().unwrap();
+    let agents = &document["ui"]["sidebar"]["agents"];
+    let hermes_rows = agents["rows_by_agent"]["hermes"].as_array().unwrap();
+    let identity_index = hermes_rows
+        .iter()
+        .position(|row| row_contains_token(row, "$quota_provider_model"))
+        .unwrap();
+    let model_index = hermes_rows
+        .iter()
+        .position(|row| row_contains_token(row, "$quota_model"))
+        .expect("hermes theme has a dedicated quota_model row");
+    assert_eq!(
+        model_index,
+        identity_index + 1,
+        "quota_model must sit immediately after quota_provider_model"
+    );
+    // Non-Hermes providers do not receive the extra model row.
+    let codex_rows = agents["rows_by_agent"]["codex"].as_array().unwrap();
+    assert!(!codex_rows
+        .iter()
+        .any(|row| row_contains_token(row, "$quota_model")));
+}
+
+#[test]
 fn existing_provider_and_model_tokens_are_migrated_to_one_identity_token() {
     let applied = add_quota_row(
         r#"[ui.sidebar.agents]

@@ -364,13 +364,44 @@ fn add_provider_rows(agents: &mut Table, rows: &Array) -> Result<()> {
         if rows_by_agent.contains_key(provider) && !is_managed {
             continue;
         }
-        let mut value = Value::Array(provider_rows(rows, color, provider));
+        let mut themed = provider_rows(rows, color, provider);
+        // Hermes is a meta-provider (Hermes/<backend>); it earns its own model
+        // row immediately after the identity row so the backend label is split
+        // from the bare model id:
+        //
+        //   Hermes/openrouter <───┐
+        //   poolside/xyz       <──┘  (new model row, only for hermes)
+        //   credits …
+        if provider == "hermes" {
+            insert_model_row(&mut themed, color);
+        }
+        let mut value = Value::Array(themed);
         value
             .decor_mut()
             .set_suffix(format!(" # {PROVIDER_STYLE_MARKER}"));
         rows_by_agent.insert(provider, Item::Value(value));
     }
     Ok(())
+}
+
+/// Insert a `[quota_model]` row right after the row that carries
+/// `$quota_provider_model`. Used only for the Hermes meta-provider, whose
+/// identity row shows the backend name (`Hermes/openrouter` / `Hermes/Codex`)
+/// rather than the model id — the bare model then needs its own row.
+fn insert_model_row(rows: &mut Array, color: Option<&str>) {
+    let Some(index) = rows
+        .iter()
+        .position(|row| row_contains_token(row, "$quota_provider_model"))
+    else {
+        return;
+    };
+    let model_row = Value::Array(Array::from_iter([styled_token(
+        "$quota_model",
+        color,
+        Some(false),
+        Some(true),
+    )]));
+    rows.insert(index + 1, model_row);
 }
 
 fn provider_rows(rows: &Array, color: Option<&str>, provider: &str) -> Array {
