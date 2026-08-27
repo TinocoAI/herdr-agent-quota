@@ -200,7 +200,29 @@ fn refresh_provider(
     topic_pane: Option<&str>,
 ) -> Result<ProviderOutcome> {
     let now = CacheStore::now_unix();
-    if should_skip_fetch(cache, provider, force, now)? {
+    // Hermes proxies whichever model is active. A /model switch inside the
+    // debounce window must still trigger a refresh, otherwise the sidebar
+    // keeps showing the previous model until the next periodic pass. Compare
+    // the live model against what the cache last published for this session.
+    let effective_force = if provider == Provider::Hermes {
+        let primary = topic_pane.and_then(|pane_id| {
+            panes
+                .iter()
+                .find(|pane| pane.pane_id == pane_id && pane.provider == provider)
+                .and_then(|pane| pane.session_id.clone())
+        });
+        let live_model = hermes::current_session_model(primary.as_deref());
+        let cached_model = cache.load(provider)?.and_then(|snapshot| {
+            primary
+                .as_deref()
+                .and_then(|sid| snapshot.session_models.get(sid).cloned())
+                .or(snapshot.model.clone())
+        });
+        force || live_model != cached_model
+    } else {
+        force
+    };
+    if should_skip_fetch(cache, provider, effective_force, now)? {
         return Ok(ProviderOutcome {
             provider,
             available: load_usable_snapshot(cache, provider)?.is_some(),

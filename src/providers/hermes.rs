@@ -257,6 +257,26 @@ fn http_error_status(error: &ureq::Error) -> String {
     }
 }
 
+/// Read the active model for `primary_session` (or the config default when no
+/// session is known) from the live Hermes state database. Used to detect a
+/// `/model` switch during the debounce window so the sidebar updates
+/// immediately instead of waiting for the next periodic refresh.
+pub fn current_session_model(primary_session: Option<&str>) -> Option<String> {
+    let session_ids = primary_session
+        .map(|session| vec![session.to_string()])
+        .unwrap_or_default();
+    let models = read_session_models(&session_ids);
+    if let Some((_, model, _)) = models.first() {
+        return Some(model.clone());
+    }
+    let fallback = current_hermes_model();
+    if fallback.is_empty() {
+        None
+    } else {
+        Some(fallback)
+    }
+}
+
 /// Backwards-compatible single-snapshot entry point used by callers that do
 /// not have session ids (e.g. manual `refresh --provider hermes`). Uses no
 /// primary session, so the backend falls back to the first known session or
@@ -298,6 +318,34 @@ mod tests {
         assert!(is_codex_model("some-codex-thing"));
         assert!(!is_codex_model("tencent/hy3"));
         assert!(!is_codex_model("openrouter/anthropic/claude"));
+    }
+
+    #[test]
+    fn reads_active_model_from_temp_state_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let hermes = dir.path().join(".hermes");
+        std::fs::create_dir_all(&hermes).unwrap();
+        let db = hermes.join("state.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, model) VALUES ('s1', 'gpt-5.6-luna')",
+            [],
+        )
+        .unwrap();
+        let previous = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", dir.path()) };
+        let model = current_session_model(Some("s1"));
+        if let Some(prev) = previous {
+            unsafe { std::env::set_var("HOME", prev) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+        assert_eq!(model.as_deref(), Some("gpt-5.6-luna"));
     }
 
     /// Live check against the real `~/.hermes/state.db`: a Codex session must
