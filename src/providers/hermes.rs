@@ -8,56 +8,103 @@ use std::path::PathBuf;
 
 const OPENROUTER_CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
 
-/// Fetch the quota snapshot for every Hermes pane identified by `session_ids`.
+/// Fetch one quota snapshot per Hermes session.
 ///
-/// Hermes is a proxy: the active model of each session decides what to report.
+/// Hermes is a proxy: the active model of each session decides what to report,
+/// and different sessions can run different backends at the same time (one pane
+/// on Codex windows, another on OpenRouter credits). Returning a snapshot per
+/// session lets the sidebar show each pane's own quota instead of forcing every
+/// Hermes pane to share one backend.
+///
 /// The active model is read live from the Hermes state database
 /// (`~/.hermes/state.db`, table `sessions` keyed by the agent session id that
 /// Herdr exposes), because a `/model` switch inside a live Hermes session is
 /// reflected there but never in `config.yaml`.
 ///
-/// - A Codex model (`gpt-5.6-luna`, `codex/...`) is reported exactly like a
-///   native Codex pane — the 5h/7d windows from the Codex app server.
-/// - Any other model (OpenRouter routes such as `tencent/hy3`) is reported as
+/// - A Codex session (`billing_provider = openai-codex`, `gpt-5.6-luna`,
+///   `codex/...`) is reported exactly like a native Codex pane — the 5h/7d
+///   windows from the Codex app server, labelled `Codex/<model>`.
+/// - Any other session (OpenRouter routes such as `tencent/hy3`) is reported as
 ///   a continuous OpenRouter credit pool.
 ///
-/// The backend (Codex windows vs OpenRouter credits) is decided by
-/// `primary_session` — the session of the pane that triggered the refresh
-/// (the focused/event pane). This keeps one pane's `/model` switch from
-/// flipping every other Hermes pane: only the pane that actually ran a Codex
-/// model reports Codex quota. When no primary session is known (e.g. the
-/// periodic watch), the first known session decides.
-///
-/// Each session's resolved model is stored under its session id so every
-/// Hermes pane shows the model it is actually running, not a shared guess.
+/// Each returned snapshot is stamped with that session's resolved model and
+/// carries no per-session model map, because it is already scoped to one
+/// session.
 pub fn fetch_for_sessions(
     session_ids: &[String],
     primary_session: Option<&str>,
-) -> Result<ProviderSnapshot> {
+) -> Result<Vec<(String, ProviderSnapshot)>> {
     let fetched_at_unix = CacheStore::now_unix();
     let session_models = read_session_models(session_ids);
 
-    // Decide the backend from the primary (event/focus) session, never from
-    // "any" session — otherwise a historical or sibling Codex session would
-    // flip the whole provider to Codex quota.
-    let primary = primary_session
-        .and_then(|sid| session_models.iter().find(|(id, _, _)| id == sid))
-        .or_else(|| session_models.first());
-    let (global_model, is_codex) = if let Some((_, model, is_codex)) = primary {
-        (model.clone(), *is_codex)
+    // When a primary (event/focus) session is known, resolve it first so a
+    // /model switch there is reflected immediately. Sessions absent from the
+    // state db (e.g. not yet persisted) fall back to the config default.
+    let order: Vec<(String, String, bool)> = if let Some(primary) = primary_session {
+        let mut ordered = session_models
+            .iter()
+            .filter(|(id, _, _)| id == primary)
+            .cloned()
+            .collect::<Vec<_>>();
+        for entry in &session_models {
+            if entry.0 != primary {
+                ordered.push(entry.clone());
+            }
+        }
+        if ordered.is_empty() {
+            ordered.push((
+                primary.to_string(),
+                current_hermes_model(),
+                is_codex_model(&current_hermes_model()),
+            ));
+        }
+        ordered
+    } else if session_models.is_empty() {
+        vec![(
+            String::new(),
+            current_hermes_model(),
+            is_codex_model(&current_hermes_model()),
+        )]
     } else {
-        let fallback = current_hermes_model();
-        (fallback.clone(), is_codex_model(&fallback))
+        session_models.clone()
     };
 
+    let mut out = Vec::new();
+    for (session_id, model, is_codex) in order {
+        if session_id.is_empty() {
+            // No session context: produce a single representative snapshot.
+            let snapshot = build_snapshot(is_codex, &model, &[], fetched_at_unix)?;
+            out.push((String::new(), snapshot));
+            continue;
+        }
+        let snapshot = build_snapshot(
+            is_codex,
+            &model,
+            &[(session_id.clone(), model.clone())],
+            fetched_at_unix,
+        )?;
+        out.push((session_id, snapshot));
+    }
+    Ok(out)
+}
+
+/// Build a Hermes snapshot for one backend decision. `session_label` carries the
+/// `(session_id, model)` pairs so the snapshot's token renderer can show the
+/// exact model the pane is running.
+fn build_snapshot(
+    is_codex: bool,
+    model: &str,
+    session_label: &[(String, String)],
+    fetched_at_unix: u64,
+) -> Result<ProviderSnapshot> {
     let mut snapshot = if is_codex {
         let mut snap = codex::fetch_for_sessions(&[])
             .map_err(|error| anyhow::anyhow!("codex fetch failed: {error}"))?;
         snap.provider = Provider::Hermes;
-        // The Hermes provider has no account gate (a shared quota), so drop
-        // the Codex account id copied over by the proxy — otherwise the
-        // snapshot would look like it belongs to a different account and be
-        // treated as unavailable.
+        // The Hermes provider has no account gate (a shared quota), so drop the
+        // Codex account id copied over by the proxy — otherwise the snapshot
+        // would look like it belongs to a different account and be treated as
+        // unavailable.
         snap.account_id = None;
         snap
     } else {
@@ -83,32 +130,32 @@ pub fn fetch_for_sessions(
         }
     };
 
-    // Stamp each session with the model it is actually running.
+    // Stamp the resolved model(s) so the sidebar shows exactly what the pane runs.
     if is_codex {
-        if session_models.is_empty() {
-            if !global_model.is_empty() {
-                snapshot.model = Some(format!("Codex/{global_model}"));
+        if session_label.is_empty() {
+            if !model.is_empty() {
+                snapshot.model = Some(format!("Codex/{model}"));
             }
         } else {
-            for (session_id, model, _) in &session_models {
+            for (session_id, model) in session_label {
                 snapshot
                     .session_models
                     .insert(session_id.clone(), format!("Codex/{model}"));
             }
-            snapshot.model = Some(format!("Codex/{}", session_models[0].1));
+            snapshot.model = Some(format!("Codex/{}", session_label[0].1));
         }
     } else {
-        if session_models.is_empty() {
-            if !global_model.is_empty() {
-                snapshot.model = Some(global_model);
+        if session_label.is_empty() {
+            if !model.is_empty() {
+                snapshot.model = Some(model.to_string());
             }
         } else {
-            for (session_id, model, _) in &session_models {
+            for (session_id, model) in session_label {
                 snapshot
                     .session_models
                     .insert(session_id.clone(), model.clone());
             }
-            snapshot.model = Some(session_models[0].1.clone());
+            snapshot.model = Some(session_label[0].1.clone());
         }
     }
 
@@ -288,7 +335,12 @@ pub fn current_session_model(primary_session: Option<&str>) -> Option<String> {
 /// the config default.
 pub fn fetch() -> Result<ProviderSnapshot> {
     let session_ids: Vec<String> = Vec::new();
-    fetch_for_sessions(&session_ids, None)
+    let pairs = fetch_for_sessions(&session_ids, None)?;
+    Ok(pairs
+        .into_iter()
+        .next()
+        .map(|(_, snapshot)| snapshot)
+        .unwrap_or_else(|| ProviderSnapshot::new(Provider::Hermes, vec![], CacheStore::now_unix())))
 }
 
 #[cfg(test)]
@@ -376,7 +428,12 @@ mod tests {
             eprintln!("no Codex session found, skipping");
             return;
         };
-        let snapshot = fetch_for_sessions(&[sid.clone()], None).expect("fetch must succeed");
+        let pairs = fetch_for_sessions(&[sid.clone()], None).expect("fetch must succeed");
+        let snapshot = pairs
+            .into_iter()
+            .find(|(id, _)| id == &sid)
+            .map(|(_, snapshot)| snapshot)
+            .unwrap_or_else(|| panic!("no snapshot for session {sid}"));
         assert!(
             snapshot
                 .model

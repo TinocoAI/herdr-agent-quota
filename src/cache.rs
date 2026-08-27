@@ -55,10 +55,46 @@ impl CacheStore {
         if !path.exists() {
             return Ok(None);
         }
-        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let bytes =
+            fs::read(&path).with_context(|| format!("read {path}", path = path.display()))?;
         let snapshot = serde_json::from_slice(&bytes)
             .with_context(|| format!("parse cached {} snapshot", provider.source()))?;
         Ok(Some(snapshot))
+    }
+
+    /// Load the Hermes snapshot cached for a specific session id.
+    ///
+    /// Hermes panes can run different backends (Codex windows vs OpenRouter
+    /// credits) at the same time, so each session gets its own snapshot. When a
+    /// per-session file is missing (older cache or a session not refreshed
+    /// yet), the legacy merged file is used as a fallback so the sidebar still
+    /// shows something rather than going blank.
+    pub fn load_hermes_for_session(&self, session_id: &str) -> Result<Option<ProviderSnapshot>> {
+        let path = self.hermes_session_path(session_id);
+        if path.exists() {
+            if let Ok(bytes) = fs::read(&path) {
+                if let Ok(snapshot) = serde_json::from_slice::<ProviderSnapshot>(&bytes) {
+                    return Ok(Some(snapshot));
+                }
+            }
+        }
+        self.load(Provider::Hermes)
+    }
+
+    pub fn save_hermes_for_session(
+        &self,
+        session_id: &str,
+        snapshot: &ProviderSnapshot,
+    ) -> Result<()> {
+        self.ensure()?;
+        let destination = self.hermes_session_path(session_id);
+        let bytes =
+            serde_json::to_vec_pretty(snapshot).context("serialize Hermes quota snapshot")?;
+        Self::atomic_replace(
+            &destination,
+            &self.root.join(format!(".{}.tmp", session_id)),
+            bytes,
+        )
     }
 
     pub fn save(&self, snapshot: &ProviderSnapshot) -> Result<()> {
@@ -439,6 +475,13 @@ impl CacheStore {
         self.root.join(format!("{}.json", provider.source()))
     }
 
+    fn hermes_session_path(&self, session_id: &str) -> PathBuf {
+        self.root.join(format!(
+            "hermes-{}.json",
+            session_id.replace(['/', ':'], "_")
+        ))
+    }
+
     fn statusline_observation_path(&self, provider: Provider) -> PathBuf {
         self.root
             .join(format!("{}.observation.json", provider.source()))
@@ -623,6 +666,43 @@ mod tests {
         let cache = CacheStore::new(directory.path());
         cache.save(&snapshot()).unwrap();
         assert_eq!(cache.load(Provider::Grok).unwrap(), Some(snapshot()));
+    }
+
+    #[test]
+    fn hermes_snapshots_are_stored_and_loaded_per_session() {
+        let directory = tempdir().unwrap();
+        let cache = CacheStore::new(directory.path());
+
+        let codex_session = ProviderSnapshot::new(
+            Provider::Hermes,
+            vec![UsageWindow::new(WindowKind::FiveHour, 50.0, None).unwrap()],
+            1,
+        )
+        .with_model(Some("Codex/gpt-5.6-luna".to_string()));
+        let openrouter_session = ProviderSnapshot::new(Provider::Hermes, vec![], 2)
+            .with_model(Some("tencent/hy3".to_string()));
+
+        cache
+            .save_hermes_for_session("session-codex", &codex_session)
+            .unwrap();
+        cache
+            .save_hermes_for_session("session-or", &openrouter_session)
+            .unwrap();
+
+        let loaded_codex = cache.load_hermes_for_session("session-codex").unwrap();
+        let loaded_or = cache.load_hermes_for_session("session-or").unwrap();
+        assert_eq!(loaded_codex, Some(codex_session));
+        assert_eq!(loaded_or, Some(openrouter_session));
+
+        // A Codex session must never resolve to the OpenRouter snapshot and
+        // vice versa — that was the bug where one pane's backend leaked into
+        // every other Hermes pane.
+        assert_ne!(loaded_codex, loaded_or);
+        assert_eq!(
+            loaded_codex.unwrap().model.as_deref(),
+            Some("Codex/gpt-5.6-luna")
+        );
+        assert_eq!(loaded_or.unwrap().model.as_deref(), Some("tencent/hy3"));
     }
 
     #[test]

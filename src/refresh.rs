@@ -163,17 +163,31 @@ pub fn focus() -> Result<()> {
 
 #[derive(Debug)]
 struct FetchedSnapshot {
-    snapshot: ProviderSnapshot,
+    snapshot: Option<ProviderSnapshot>,
     preserve_context: bool,
     session_id: Option<String>,
+    /// Hermes snapshots keyed by session id. When non-empty the refresh stored
+    /// one snapshot per session so each pane shows its own backend.
+    hermes_sessions: Vec<(String, ProviderSnapshot)>,
 }
 
 impl FetchedSnapshot {
     fn direct(snapshot: ProviderSnapshot) -> Self {
         Self {
+            snapshot: Some(snapshot),
+            preserve_context: false,
+            session_id: None,
+            hermes_sessions: Vec::new(),
+        }
+    }
+
+    fn hermes_per_session(pairs: Vec<(String, ProviderSnapshot)>) -> Self {
+        let snapshot = pairs.first().map(|(_, snapshot)| snapshot.clone());
+        Self {
             snapshot,
             preserve_context: false,
             session_id: None,
+            hermes_sessions: pairs,
         }
     }
 }
@@ -212,11 +226,18 @@ fn refresh_provider(
                 .and_then(|pane| pane.session_id.clone())
         });
         let live_model = hermes::current_session_model(primary.as_deref());
-        let cached_model = cache.load(provider)?.and_then(|snapshot| {
-            primary
-                .as_deref()
-                .and_then(|sid| snapshot.session_models.get(sid).cloned())
-                .or(snapshot.model.clone())
+        let cached_model = primary.as_deref().and_then(|session_id| {
+            cache
+                .load_hermes_for_session(session_id)
+                .ok()
+                .flatten()
+                .and_then(|snapshot| {
+                    snapshot
+                        .session_models
+                        .get(session_id)
+                        .cloned()
+                        .or(snapshot.model.clone())
+                })
         });
         force || live_model != cached_model
     } else {
@@ -256,8 +277,10 @@ fn refresh_provider(
         Provider::Codex => codex::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Grok => grok::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Claude | Provider::Agy => load_statusline_snapshot(cache, provider),
-        Provider::Hermes => hermes::fetch_for_sessions(&session_ids, primary_session.as_deref())
-            .map(FetchedSnapshot::direct),
+        Provider::Hermes => {
+            let pairs = hermes::fetch_for_sessions(&session_ids, primary_session.as_deref())?;
+            Ok(FetchedSnapshot::hermes_per_session(pairs))
+        }
     };
     cache.mark_refresh(provider, now)?;
     match fetched {
@@ -266,13 +289,29 @@ fn refresh_provider(
                 mut snapshot,
                 preserve_context,
                 session_id,
+                hermes_sessions,
             } = fetched;
             if preserve_context {
-                cache.save_preserving_context_for_session(snapshot, session_id.as_deref())?;
+                cache.save_preserving_context_for_session(
+                    snapshot.unwrap_or_else(|| {
+                        ProviderSnapshot::new(provider, vec![], CacheStore::now_unix())
+                    }),
+                    session_id.as_deref(),
+                )?;
             } else if matches!(provider, Provider::Codex | Provider::Grok) {
-                cache.save_preserving_diagnostics_for_sessions(&mut snapshot, &session_ids)?;
-            } else {
-                cache.save(&snapshot)?;
+                if let Some(snapshot) = snapshot.as_mut() {
+                    cache.save_preserving_diagnostics_for_sessions(snapshot, &session_ids)?;
+                }
+            } else if !hermes_sessions.is_empty() {
+                // Hermes runs a different backend per session (Codex windows vs
+                // OpenRouter credits). Store each session's snapshot separately so
+                // the sidebar can show every pane's own quota instead of forcing a
+                // single backend onto all Hermes panes.
+                for (session_id, session_snapshot) in &hermes_sessions {
+                    cache.save_hermes_for_session(session_id, session_snapshot)?;
+                }
+            } else if let Some(snapshot) = snapshot.as_ref() {
+                cache.save(snapshot)?;
             }
             Ok(ProviderOutcome {
                 provider,
@@ -363,9 +402,10 @@ fn load_statusline_snapshot(cache: &CacheStore, provider: Provider) -> Result<Fe
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     Ok(FetchedSnapshot {
-        snapshot,
+        snapshot: Some(snapshot),
         preserve_context: true,
         session_id,
+        hermes_sessions: Vec::new(),
     })
 }
 
@@ -389,13 +429,34 @@ fn publish(
     let mut tokens = Vec::new();
     let now = CacheStore::now_unix();
     for provider in providers {
-        let snapshot = cache.load(*provider)?;
-        let (account_id, mtime) = current_account_gate(*provider);
-        let usable = snapshot
-            .as_ref()
-            .filter(|snapshot| snapshot.usable_for_account(account_id.as_deref(), mtime));
         for pane in panes.iter_mut().filter(|pane| pane.provider == *provider) {
-            if let Some(snapshot) = usable {
+            // Hermes stores one snapshot per session (each pane can run a
+            // different backend), so resolve the snapshot by the pane's own
+            // session id. Other providers share a single provider snapshot.
+            let raw;
+            let usable;
+            if *provider == Provider::Hermes {
+                match pane.session_id.as_deref() {
+                    Some(session_id) => {
+                        raw = cache.load_hermes_for_session(session_id)?;
+                        let (account_id, mtime) = current_account_gate(*provider);
+                        usable = raw.as_ref().filter(|snapshot| {
+                            snapshot.usable_for_account(account_id.as_deref(), mtime)
+                        });
+                    }
+                    None => {
+                        raw = None;
+                        usable = None;
+                    }
+                }
+            } else {
+                raw = cache.load(*provider)?;
+                let (account_id, mtime) = current_account_gate(*provider);
+                usable = raw
+                    .as_ref()
+                    .filter(|snapshot| snapshot.usable_for_account(account_id.as_deref(), mtime));
+            };
+            if let Some(snapshot) = usable.as_ref() {
                 if let Some(session_id) = pane.session_id.as_deref() {
                     if let Some(summary) = snapshot.session_summaries.get(session_id) {
                         pane.session_summary = summary.clone();
@@ -404,7 +465,7 @@ fn publish(
             }
             if let Some(values) = tokens_for_loaded_snapshot(
                 *provider,
-                snapshot.as_ref(),
+                raw.as_ref(),
                 usable,
                 now,
                 pane.session_id.as_deref(),
