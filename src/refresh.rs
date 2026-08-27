@@ -224,7 +224,7 @@ fn refresh_provider(
         Provider::Codex => codex::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Grok => grok::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Claude | Provider::Agy => load_statusline_snapshot(cache, provider),
-        Provider::Hermes => hermes::fetch().map(FetchedSnapshot::direct),
+        Provider::Hermes => hermes::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
     };
     cache.mark_refresh(provider, now)?;
     match fetched {

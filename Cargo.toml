@@ -23,6 +23,8 @@ thiserror = "2.0"
 time = { version = "0.3", features = ["parsing"] }
 toml_edit = "0.22"
 ureq = { version = "2.12", features = ["json"] }
+# Read the active Hermes model per session from the Hermes state database.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Only used to put the Codex app-server in its own process group.
 [target.'cfg(unix)'.dependencies]

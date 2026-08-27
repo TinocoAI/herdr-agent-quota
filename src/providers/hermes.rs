@@ -8,74 +8,137 @@ use std::path::PathBuf;
 
 const OPENROUTER_CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
 
-/// Fetch the quota for the Hermes agent pane.
+/// Fetch the quota snapshot for every Hermes pane identified by `session_ids`.
 ///
-/// Hermes is a proxy: the active model decides which backend to report.
+/// Hermes is a proxy: the active model of each session decides what to report.
+/// The active model is read live from the Hermes state database
+/// (`~/.hermes/state.db`, table `sessions` keyed by the agent session id that
+/// Herdr exposes), because a `/model` switch inside a live Hermes session is
+/// reflected there but never in `config.yaml`.
+///
 /// - A Codex model (`gpt-5.6-luna`, `codex/...`) is reported exactly like a
-///   native Codex pane would be — the 5h/7d windows from the Codex app server.
-/// - Any other model (OpenRouter routes such as `tencent/hy3`, or a bare
-///   `openrouter/...` id) is reported as a continuous OpenRouter credit pool.
+///   native Codex pane — the 5h/7d windows from the Codex app server.
+/// - Any other model (OpenRouter routes such as `tencent/hy3`) is reported as
+///   a continuous OpenRouter credit pool.
 ///
-/// The active model is read from `HERMES_INFERENCE_MODEL` when present
-/// (set inside the Hermes process on a `/model` change) and otherwise from
-/// `~/.hermes/config.yaml`.
-pub fn fetch() -> Result<ProviderSnapshot> {
+/// Each session's resolved model is stored under its session id so every
+/// Hermes pane shows the model it is actually running, not a shared guess.
+pub fn fetch_for_sessions(session_ids: &[String]) -> Result<ProviderSnapshot> {
     let fetched_at_unix = CacheStore::now_unix();
-    let model = current_hermes_model();
+    let session_models = read_session_models(session_ids);
 
-    if is_codex_model(&model) {
-        let mut snapshot = codex::fetch_for_sessions(&[])
+    // Backend decision: if any active session proxies Codex, report Codex
+    // windows for the whole provider (Hermes runs one active model family at a
+    // time, and the Codex subscription has no OpenRouter credit balance).
+    let any_codex = session_models.iter().any(|(_, _, is_codex)| *is_codex);
+    let (global_model, is_codex) = if let Some((_, model, is_codex)) = session_models.first() {
+        (model.clone(), *is_codex)
+    } else {
+        let fallback = current_hermes_model();
+        (fallback.clone(), is_codex_model(&fallback))
+    };
+    let is_codex = any_codex || is_codex;
+
+    let mut snapshot = if is_codex {
+        let mut snap = codex::fetch_for_sessions(&[])
             .map_err(|error| anyhow::anyhow!("codex fetch failed: {error}"))?;
-        snapshot.provider = Provider::Hermes;
+        snap.provider = Provider::Hermes;
         // The Hermes provider has no account gate (a shared quota), so drop
         // the Codex account id copied over by the proxy — otherwise the
         // snapshot would look like it belongs to a different account and be
         // treated as unavailable.
-        snapshot.account_id = None;
-        let model_label = if model.is_empty() {
-            "codex".to_string()
-        } else {
-            model.clone()
-        };
-        // Identical label to a native Codex pane: "Codex/<model>".
-        snapshot.model = Some(format!("Codex/{model_label}"));
-        return Ok(snapshot);
-    }
-
-    // OpenRouter (or any non-Codex backend): continuous credit balance.
-    let key = match openrouter_key() {
-        Some(key) if !key.is_empty() => key,
-        _ => {
-            let mut snapshot = ProviderSnapshot::new(Provider::Hermes, vec![], fetched_at_unix);
-            if !model.is_empty() {
-                snapshot.model = Some(model);
+        snap.account_id = None;
+        snap
+    } else {
+        match openrouter_key() {
+            Some(key) if !key.is_empty() => {
+                let agent = ureq::AgentBuilder::new()
+                    .timeout_connect(std::time::Duration::from_secs(5))
+                    .timeout_read(std::time::Duration::from_secs(10))
+                    .timeout_write(std::time::Duration::from_secs(10))
+                    .build();
+                let response = agent
+                    .get(OPENROUTER_CREDITS_URL)
+                    .set("Authorization", &format!("Bearer {key}"))
+                    .set("Accept", "application/json")
+                    .call()
+                    .map_err(|error| ProviderError::Request(http_error_status(&error)))?;
+                let value: Value = response
+                    .into_json()
+                    .context("decode OpenRouter credits response")?;
+                parse_credits_response(&value, fetched_at_unix)?
             }
-            return Ok(snapshot);
+            _ => ProviderSnapshot::new(Provider::Hermes, vec![], fetched_at_unix),
         }
     };
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(5))
-        .timeout_read(std::time::Duration::from_secs(10))
-        .timeout_write(std::time::Duration::from_secs(10))
-        .build();
-
-    let response = agent
-        .get(OPENROUTER_CREDITS_URL)
-        .set("Authorization", &format!("Bearer {key}"))
-        .set("Accept", "application/json")
-        .call()
-        .map_err(|error| ProviderError::Request(http_error_status(&error)))?;
-
-    let value: Value = response
-        .into_json()
-        .context("decode OpenRouter credits response")?;
-
-    let mut snapshot = parse_credits_response(&value, fetched_at_unix)?;
-    if !model.is_empty() {
-        snapshot.model = Some(model);
+    // Stamp each session with the model it is actually running.
+    if is_codex {
+        if session_models.is_empty() {
+            if !global_model.is_empty() {
+                snapshot.model = Some(format!("Codex/{global_model}"));
+            }
+        } else {
+            for (session_id, model, _) in &session_models {
+                snapshot
+                    .session_models
+                    .insert(session_id.clone(), format!("Codex/{model}"));
+            }
+            snapshot.model = Some(format!("Codex/{}", session_models[0].1));
+        }
+    } else {
+        if session_models.is_empty() {
+            if !global_model.is_empty() {
+                snapshot.model = Some(global_model);
+            }
+        } else {
+            for (session_id, model, _) in &session_models {
+                snapshot
+                    .session_models
+                    .insert(session_id.clone(), model.clone());
+            }
+            snapshot.model = Some(session_models[0].1.clone());
+        }
     }
+
     Ok(snapshot)
+}
+
+/// Read `(session_id, model, is_codex)` for each known Hermes session from the
+/// live Hermes state database. Failures (missing db, lock, parse) are silently
+/// ignored so the caller can fall back to the config default.
+fn read_session_models(session_ids: &[String]) -> Vec<(String, String, bool)> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return vec![];
+    };
+    let db_path = PathBuf::from(home).join(".hermes/state.db");
+    if !db_path.exists() {
+        return vec![];
+    }
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return vec![];
+    };
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+
+    let mut out = Vec::new();
+    for session_id in session_ids {
+        let Ok(model): Result<String, _> = conn.query_row(
+            "SELECT model FROM sessions WHERE id = ?1",
+            [session_id.as_str()],
+            |row| row.get(0),
+        ) else {
+            continue;
+        };
+        if model.is_empty() {
+            continue;
+        }
+        let is_codex = is_codex_model(&model);
+        out.push((session_id.clone(), model, is_codex));
+    }
+    out
 }
 
 fn parse_credits_response(
@@ -100,10 +163,9 @@ fn parse_credits_response(
     Ok(snapshot)
 }
 
-/// Resolve the active Hermes model. `HERMES_INFERENCE_MODEL` is authoritative
-/// (it reflects a live `/model` switch inside the Hermes process); otherwise
-/// the `model.default` (or first `model:`/`default:`) line of the config is
-/// used. Returns an empty string when nothing can be determined.
+/// Resolve the active Hermes model from `config.yaml` when no live session is
+/// available. `HERMES_INFERENCE_MODEL` is authoritative; otherwise the
+/// `model.default` (or first `model:`/`default:`) line is used.
 fn current_hermes_model() -> String {
     if let Ok(model) = std::env::var("HERMES_INFERENCE_MODEL") {
         let model = model.trim().to_string();
@@ -137,7 +199,6 @@ fn current_hermes_model() -> String {
                 .map(|(_, value)| value.trim().to_string())
                 .unwrap_or_default();
         }
-        // Left the `model:` block once we hit another top-level key.
         if !line.starts_with(' ') && !line.starts_with('\t') && stripped.contains(':') {
             in_model = false;
         }
@@ -185,6 +246,13 @@ fn http_error_status(error: &ureq::Error) -> String {
     }
 }
 
+/// Backwards-compatible single-snapshot entry point used by callers that do
+/// not have session ids (e.g. manual `refresh --provider hermes`).
+pub fn fetch() -> Result<ProviderSnapshot> {
+    let session_ids: Vec<String> = Vec::new();
+    fetch_for_sessions(&session_ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +285,52 @@ mod tests {
         assert!(is_codex_model("some-codex-thing"));
         assert!(!is_codex_model("tencent/hy3"));
         assert!(!is_codex_model("openrouter/anthropic/claude"));
+    }
+
+    /// Live check against the real `~/.hermes/state.db`: a Codex session must
+    /// be reported as a Codex-proxied Hermes pane (windows present, model
+    /// prefixed with "Codex/"). Ignored by default because it needs a live
+    /// Hermes state database.
+    #[test]
+    #[ignore]
+    fn live_proxy_codex_from_state_db() {
+        let home = std::env::var_os("HOME").expect("HOME must be set");
+        let db = PathBuf::from(home).join(".hermes/state.db");
+        let Ok(conn) =
+            rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        else {
+            eprintln!("state.db unavailable, skipping");
+            return;
+        };
+        let Ok(sid): Result<String, _> = conn.query_row(
+            "SELECT id FROM sessions WHERE model = 'gpt-5.6-luna' OR model LIKE 'codex/%' LIMIT 1",
+            [],
+            |row| row.get(0),
+        ) else {
+            eprintln!("no Codex session found, skipping");
+            return;
+        };
+        let snapshot = fetch_for_sessions(&[sid.clone()]).expect("fetch must succeed");
+        assert!(
+            snapshot
+                .model
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Codex/"),
+            "expected Codex-proxied model, got {:?}",
+            snapshot.model
+        );
+        assert!(
+            !snapshot.windows.is_empty(),
+            "Codex proxy must carry 5h/7d windows"
+        );
+        assert!(
+            snapshot
+                .session_models
+                .get(&sid)
+                .map(|m| m.starts_with("Codex/"))
+                .unwrap_or(false),
+            "session model must be Codex-prefixed"
+        );
     }
 }
