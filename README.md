@@ -181,6 +181,7 @@ long turns no longer start one refresh command per tool call.
 | OpenAI Codex | model + `5h` + `7d` + context + cache + approx. TTL + local session summary | One-shot local `codex app-server --stdio` plus a bounded tail read of matching `~/.codex` rollout JSONL | ChatGPT subscription login; API-key mode is shown as unavailable |
 | Grok CLI / Grok Build | model + `7d` + context + cache | Local `~/.grok/auth.json` billing plus bounded reads of `signals.json`/`updates.jsonl` session metadata | Covered by the unified watcher; no response hook is installed |
 | Agy / Antigravity CLI | model + `5h` + `7d` + context + cache hit | Official `statusLine` JSON: `model`, `quota`, and `context_window` | The configure action installs and chains it automatically |
+| Hermes (meta) | backend + model + `5h`/`7d` **or** `credits $X · Y%` per pane | OpenRouter `/api/v1/credits` for `openrouter` sessions; delegated Codex provider for `openai-codex` sessions | Reads the live model/backend per session from `~/.hermes/state.db` |
 
 The sidebar shows **percentage remaining** and the time until each quota reset,
 not quota token counts. The two Claude windows use compact `5h` and `7d`
@@ -210,6 +211,61 @@ limit beside context instead of leaving an empty slot on the right.
 A failed refresh never replaces a successful cached value with `unavailable`;
 a provider without any successful snapshot is shown as `N/A` until its first
 usable event.
+
+### Hermes (meta-provider)
+
+Hermes itself is not a model provider — every Hermes pane routes through an
+underlying provider, most commonly OpenRouter (credit) or an OpenAI Codex
+subscription (`billing_provider = openai-codex`). The plugin reads the **per
+session** backend from the live Hermes state database
+(`~/.hermes/state.db`, table `sessions`, column `billing_provider`) at refresh
+time, so the sidebar follows a `model` or backend switch inside Hermes without
+restart. Each pane resolves its own session and shows its own quota,
+independently:
+
+- A `billing_provider` of `openrouter` renders the **OpenRouter credit** card.
+- A `billing_provider` of `openai-codex` (or a Codex-family model id) renders
+  the **Codex usage-window** card and is branded as a Hermes/Codex proxy.
+
+#### Per-pane sidebar layout
+
+Each Hermes pane gets one snapshot file (`state/herdr-agent-quota/hermes-<session_id>.json`),
+so an OpenRouter pane never inherits a Codex pane's windows and vice-versa:
+
+```text
+Hermes + OpenRouter            Hermes + Codex (proxy)
+─────────────────────────────  ─────────────────────────
+Hermes/openrouter              Hermes/Codex
+poolside/laguna-s-2.1          gpt-5.6-luna
+credits $16.54 · 16%           5h 73% 2h49m
+                               7d 90% 5d6h
+```
+
+- Row 1 (`state_icon`/`tab`) is left clean — no `(!/●)` or summary symbol.
+- Row 2 is the backend identity: `Hermes/openrouter` or `Hermes/Codex`.
+- Row 3 is the bare model id for the active session (`poolside/laguna-s-2.1`
+  or `gpt-5.6-luna`).
+- Row 4+ is backend-specific: credits percent for OpenRouter, or `5h`/`7d`
+  windows for the Codex proxy.
+
+A native (non-Hermes) Codex pane keeps the original `Codex/<model>` identity row
+and does not gain the extra model row, so it reads identically to a direct
+Codex pane.
+
+#### Installing this fork
+
+The upstream registry entry tracks `levi-qiao`; to consume this
+per-session Hermes implementation, install from the fork:
+
+```
+herdr plugin install https://github.com/TinocoAI/herdr-agent-quota --ref hermes-provider
+herdr plugin action invoke herdr-agent-quota.configure
+```
+
+The first command builds the `[[build]]` target with `rusqlite` (bundled SQLite)
+on install. The plugin reads `~/.hermes/state.db` read-only with a 500 ms busy
+timeout and falls back to `~/.hermes/config.yaml` only if the database is
+unavailable.
 
 ## Agy / Antigravity collection
 
