@@ -56,6 +56,7 @@ pub enum ProviderSelection {
     Grok,
     Claude,
     Agy,
+    Hermes,
 }
 
 impl ProviderSelection {
@@ -66,6 +67,7 @@ impl ProviderSelection {
             Self::Grok => vec![Provider::Grok],
             Self::Claude => vec![Provider::Claude],
             Self::Agy => vec![Provider::Agy],
+            Self::Hermes => vec![Provider::Hermes],
         }
     }
 }

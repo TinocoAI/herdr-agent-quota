@@ -6,7 +6,7 @@ use crate::herdr::{
 use crate::model::{Provider, ProviderSnapshot};
 use crate::presentation::MetadataTokens;
 use crate::providers::statusline::enrich_cache_session;
-use crate::providers::{codex, grok};
+use crate::providers::{codex, grok, hermes};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
@@ -224,6 +224,7 @@ fn refresh_provider(
         Provider::Codex => codex::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Grok => grok::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Claude | Provider::Agy => load_statusline_snapshot(cache, provider),
+        Provider::Hermes => hermes::fetch().map(FetchedSnapshot::direct),
     };
     cache.mark_refresh(provider, now)?;
     match fetched {
@@ -299,7 +300,7 @@ fn current_account_gate(provider: Provider) -> (Option<String>, Option<u64>) {
             (account_id, mtime)
         }
         Provider::Codex => (codex::current_account_id(), codex::auth_mtime_unix()),
-        Provider::Claude | Provider::Agy => (None, None),
+        Provider::Claude | Provider::Agy | Provider::Hermes => (None, None),
     }
 }
 

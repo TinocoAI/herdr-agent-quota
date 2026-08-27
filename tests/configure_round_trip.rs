@@ -204,8 +204,22 @@ fn context_is_the_penultimate_row_and_model_shares_provider_style() {
             })
         })
         .unwrap();
+    let credits_index = rows
+        .iter()
+        .position(|row| {
+            row.as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.as_inline_table()
+                        .and_then(|table| table.get("token"))
+                        .and_then(toml_edit::Value::as_str)
+                        .is_some_and(|token| token == "$quota_credits")
+                })
+            })
+        })
+        .unwrap();
     assert_eq!(context_index + 1, limit_index);
-    assert_eq!(limit_index + 1, rows.len());
+    assert_eq!(limit_index + 1, credits_index);
+    assert_eq!(credits_index + 1, rows.len());
 
     let claude_rows = agents["rows_by_agent"]["claude"].as_value().unwrap();
     let rendered = claude_rows.to_string();

@@ -7,7 +7,7 @@ use std::process::Command;
 
 const METADATA_TTL_MS: &str = "86400000";
 const MAX_METADATA_TOKENS: usize = 16;
-const METADATA_TOKEN_NAMES: [&str; 18] = [
+const METADATA_TOKEN_NAMES: [&str; 20] = [
     "quota_state",
     "quota_provider",
     "quota_model",
@@ -26,6 +26,8 @@ const METADATA_TOKEN_NAMES: [&str; 18] = [
     "quota_week_danger",
     "quota_topic",
     "quota_error",
+    "quota_credits",
+    "quota_credits_pct",
 ];
 const OBSOLETE_METADATA_TOKEN_NAMES: [&str; 2] = ["quota_icon", "quota_status"];
 const LEGACY_METADATA_TOKEN_NAMES: [&str; 2] = ["quota_badge", "quota_session"];
@@ -379,6 +381,8 @@ fn desired_tokens(values: &MetadataTokens, topic: &str) -> BTreeMap<String, Stri
     if let Some(error) = &values.quota_error {
         tokens.insert("quota_error".to_string(), error.clone());
     }
+    insert_optional_token(&mut tokens, "quota_credits", &values.quota_credits);
+    insert_optional_token(&mut tokens, "quota_credits_pct", &values.quota_credits_pct);
     tokens
 }
 

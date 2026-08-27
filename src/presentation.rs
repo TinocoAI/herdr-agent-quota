@@ -19,6 +19,8 @@ pub struct MetadataTokens {
     pub quota_cache: String,
     pub quota_cache_ttl: String,
     pub quota_error: Option<String>,
+    pub quota_credits: String,
+    pub quota_credits_pct: String,
 }
 
 impl MetadataTokens {
@@ -48,9 +50,19 @@ impl MetadataTokens {
         now_unix: u64,
         session_id: Option<&str>,
     ) -> Self {
-        let quota_model = match session_id {
-            Some(session_id) => snapshot.model_for_session(Some(session_id)),
-            None => snapshot.model.as_deref(),
+        // Hermes proxies a single shared model across all of its panes, so the
+        // global model is the right value even when a session id is present.
+        // Other providers keep the strict per-session lookup so one pane never
+        // inherits another pane's active model.
+        let quota_model = if matches!(snapshot.provider, Provider::Hermes) {
+            snapshot
+                .model_for_session(session_id)
+                .or(snapshot.model.as_deref())
+        } else {
+            match session_id {
+                Some(session_id) => snapshot.model_for_session(Some(session_id)),
+                None => snapshot.model.as_deref(),
+            }
         };
         let context =
             session_id.and_then(|session_id| snapshot.context_for_session(Some(session_id)));
@@ -65,10 +77,21 @@ impl MetadataTokens {
     ) -> Self {
         let quota_provider = snapshot.provider.display_name().to_string();
         let quota_model = model.unwrap_or_default().to_string();
+        let credits = snapshot.credits.as_ref();
+        // When Hermes proxies Codex, show the exact same identity label a
+        // native Codex pane would ("Codex/<model>") so the two are
+        // indistinguishable in the sidebar.
+        let quota_provider_model = if matches!(snapshot.provider, Provider::Hermes)
+            && quota_model.to_ascii_lowercase().starts_with("codex/")
+        {
+            quota_model.clone()
+        } else {
+            provider_model_label(&quota_provider, &quota_model)
+        };
         Self {
             quota_state: snapshot.severity(now_unix).symbol().to_string(),
             quota_icon: snapshot.provider.icon().to_string(),
-            quota_provider_model: provider_model_label(&quota_provider, &quota_model),
+            quota_provider_model,
             quota_provider,
             quota_model,
             quota_status: snapshot.severity(now_unix).label().to_string(),
@@ -81,6 +104,12 @@ impl MetadataTokens {
             quota_cache: sidebar_cache(context),
             quota_cache_ttl: sidebar_cache_ttl(context, now_unix),
             quota_error: sidebar_cache_error(context, now_unix),
+            quota_credits: credits
+                .map(|credits| format!("credits ${:.2}", credits.total - credits.used))
+                .unwrap_or_default(),
+            quota_credits_pct: credits
+                .map(|credits| format!("{:.0}%", credits.remaining_percent))
+                .unwrap_or_default(),
         }
     }
 
@@ -95,19 +124,29 @@ impl MetadataTokens {
             quota_status: Severity::Unknown.label().to_string(),
             quota_5h: match provider {
                 Provider::Claude | Provider::Agy => "5h N/A".to_string(),
-                Provider::Codex | Provider::Grok => String::new(),
+                Provider::Codex | Provider::Grok | Provider::Hermes => String::new(),
             },
             quota_5h_severity: match provider {
                 Provider::Claude | Provider::Agy => Some(Severity::Unknown),
-                Provider::Codex | Provider::Grok => None,
+                Provider::Codex | Provider::Grok | Provider::Hermes => None,
             },
-            quota_week: "7d N/A".to_string(),
-            quota_week_severity: Some(Severity::Unknown),
+            quota_week: match provider {
+                Provider::Claude | Provider::Agy | Provider::Codex | Provider::Grok => {
+                    "7d N/A".to_string()
+                }
+                Provider::Hermes => String::new(),
+            },
+            quota_week_severity: match provider {
+                Provider::Claude | Provider::Agy => Some(Severity::Unknown),
+                Provider::Codex | Provider::Grok | Provider::Hermes => None,
+            },
             quota_summary: "unavailable".to_string(),
             quota_context: String::new(),
             quota_cache: String::new(),
             quota_cache_ttl: String::new(),
             quota_error: Some(reason.into().chars().take(80).collect()),
+            quota_credits: String::new(),
+            quota_credits_pct: String::new(),
         }
     }
 }

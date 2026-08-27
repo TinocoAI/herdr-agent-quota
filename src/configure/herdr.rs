@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-const QUOTA_ROW_MARKERS: [&str; 25] = [
+const QUOTA_ROW_MARKERS: [&str; 27] = [
     "$quota_badge",
     "$quota_state",
     "$quota_icon",
@@ -29,6 +29,8 @@ const QUOTA_ROW_MARKERS: [&str; 25] = [
     "$quota_week_warning",
     "$quota_week_danger",
     "$quota_week_unknown",
+    "$quota_credits",
+    "$quota_credits_pct",
 ];
 const ROW_GAP_MARKER: &str = "herdr-agent-quota";
 const PROVIDER_STYLE_MARKER: &str = "herdr-agent-quota-provider";
@@ -39,11 +41,12 @@ const QUOTA_SAFE_COLOR: &str = "#84b084";
 const QUOTA_WARNING_COLOR: &str = "#cdaa65";
 const QUOTA_DANGER_COLOR: &str = "#ca6470";
 const DIAGNOSTIC_COLOR: &str = "#9aa7b8";
-const PROVIDER_STYLES: [(&str, Option<&str>); 4] = [
+const PROVIDER_STYLES: [(&str, Option<&str>); 5] = [
     ("claude", Some("#c47f6a")),
     ("codex", Some("#7998b7")),
     ("grok", Some("#acb4c3")),
     ("agy", Some("#84b0af")),
+    ("hermes", Some("#b59ad6")),
 ];
 
 pub fn check() -> Result<()> {
@@ -598,6 +601,19 @@ fn append_quota_rows(rows: &mut Array) {
     )));
 
     append_window_row(rows);
+    append_credits_row(rows);
+}
+
+fn append_credits_row(rows: &mut Array) {
+    rows.push(Value::Array(Array::from_iter([
+        styled_token("$quota_credits", Some("#b59ad6"), Some(true), Some(false)),
+        styled_token(
+            "$quota_credits_pct",
+            Some("#b59ad6"),
+            Some(true),
+            Some(false),
+        ),
+    ])));
 }
 
 fn append_cache_row(rows: &mut Array) {

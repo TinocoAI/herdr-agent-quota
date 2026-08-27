@@ -10,10 +10,17 @@ pub enum Provider {
     Grok,
     Claude,
     Agy,
+    Hermes,
 }
 
 impl Provider {
-    pub const ALL: [Self; 4] = [Self::Codex, Self::Grok, Self::Claude, Self::Agy];
+    pub const ALL: [Self; 5] = [
+        Self::Codex,
+        Self::Grok,
+        Self::Claude,
+        Self::Agy,
+        Self::Hermes,
+    ];
 
     pub fn badge(self) -> &'static str {
         match self {
@@ -21,6 +28,7 @@ impl Provider {
             Self::Grok => "[X]",
             Self::Claude => "[A]",
             Self::Agy => "[G]",
+            Self::Hermes => "[H]",
         }
     }
 
@@ -32,6 +40,7 @@ impl Provider {
             Self::Grok => "✕G",
             Self::Claude => "✦Cl",
             Self::Agy => "△Ag",
+            Self::Hermes => "✦H",
         }
     }
 
@@ -41,6 +50,7 @@ impl Provider {
             Self::Grok => "Grok",
             Self::Claude => "Claude",
             Self::Agy => "Agy",
+            Self::Hermes => "Hermes",
         }
     }
 
@@ -50,6 +60,7 @@ impl Provider {
             Self::Grok => "grok-cli-billing",
             Self::Claude => "claude-statusline",
             Self::Agy => "agy-statusline",
+            Self::Hermes => "hermes-credits",
         }
     }
 }
@@ -63,6 +74,7 @@ impl std::str::FromStr for Provider {
             "grok" => Ok(Self::Grok),
             "claude" | "claude-code" | "anthropic" => Ok(Self::Claude),
             "agy" | "antigravity" | "antigravity-cli" => Ok(Self::Agy),
+            "hermes" => Ok(Self::Hermes),
             other => Err(ModelError::UnknownProvider(other.to_string())),
         }
     }
@@ -353,6 +365,37 @@ pub struct ProviderSnapshot {
     /// this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+    /// OpenRouter credit pool for the Hermes agent. Continuous balance with no
+    /// 5h/7d reset window; reported alongside usage when the active model is an
+    /// OpenRouter-backed id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<CreditUsage>,
+}
+
+/// OpenRouter credit pool reported for the Hermes agent. Unlike the provider
+/// windows, this is a continuous balance with no 5h/7d reset, so the sidebar
+/// shows the dollar figure and remaining percentage directly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreditUsage {
+    pub total: f64,
+    pub used: f64,
+    pub remaining_percent: f64,
+}
+
+impl CreditUsage {
+    pub fn new(total: f64, used: f64) -> Self {
+        let remaining = (total - used).max(0.0);
+        let remaining_percent = if total > 0.0 {
+            remaining / total * 100.0
+        } else {
+            0.0
+        };
+        Self {
+            total,
+            used,
+            remaining_percent,
+        }
+    }
 }
 
 impl ProviderSnapshot {
@@ -368,6 +411,7 @@ impl ProviderSnapshot {
             session_models: BTreeMap::new(),
             session_contexts: BTreeMap::new(),
             account_id: None,
+            credits: None,
         }
     }
 
@@ -444,10 +488,40 @@ impl ProviderSnapshot {
             Provider::Codex | Provider::Claude | Provider::Agy => self
                 .window(WindowKind::FiveHour)
                 .or_else(|| self.window(WindowKind::Weekly)),
+            // Hermes proxies whichever backend the active model uses. When the
+            // model is Codex it carries 5h/7d windows, so quota health follows
+            // the windows; otherwise it follows the continuous OpenRouter
+            // credit pool.
+            Provider::Hermes => {
+                return if let Some(window) = self
+                    .window(WindowKind::FiveHour)
+                    .or_else(|| self.window(WindowKind::Weekly))
+                {
+                    Severity::for_window(window, now_unix)
+                } else {
+                    self.credits_severity()
+                };
+            }
         };
         relevant
             .map(|window| Severity::for_window(window, now_unix))
             .unwrap_or(Severity::Unknown)
+    }
+
+    /// Severity for the Hermes credit pool. `unknown` while no credits are
+    /// known, `danger` below 20% remaining, otherwise `normal`.
+    pub fn credits_severity(&self) -> Severity {
+        let Some(credits) = &self.credits else {
+            return Severity::Unknown;
+        };
+        if credits.remaining_percent <= 0.0 {
+            return Severity::Danger;
+        }
+        if credits.remaining_percent < 20.0 {
+            Severity::Danger
+        } else {
+            Severity::Normal
+        }
     }
 }
 
