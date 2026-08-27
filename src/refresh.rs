@@ -106,7 +106,7 @@ fn refresh_and_publish(
     force: bool,
     panes: &[AgentPane],
 ) -> Result<()> {
-    refresh_selected(cache, providers, force, panes)?;
+    refresh_selected(cache, providers, force, panes, None)?;
     publish(cache, providers, None, Some(panes))
 }
 
@@ -122,7 +122,7 @@ fn run_internal(
     // sessions without adding another Herdr call or reading any pane output.
     let panes = list_agent_panes().ok();
     let session_panes = panes.as_deref().unwrap_or_default();
-    let outcomes = refresh_selected(&cache, providers, force, session_panes)?;
+    let outcomes = refresh_selected(&cache, providers, force, session_panes, topic_pane)?;
     publish(&cache, providers, topic_pane, panes.as_deref())?;
     if json {
         println!("{}", serde_json::to_string_pretty(&outcomes)?);
@@ -183,11 +183,12 @@ fn refresh_selected(
     providers: &[Provider],
     force: bool,
     panes: &[AgentPane],
+    topic_pane: Option<&str>,
 ) -> Result<Vec<ProviderOutcome>> {
     providers
         .iter()
         .copied()
-        .map(|provider| refresh_provider(cache, provider, force, panes))
+        .map(|provider| refresh_provider(cache, provider, force, panes, topic_pane))
         .collect()
 }
 
@@ -196,6 +197,7 @@ fn refresh_provider(
     provider: Provider,
     force: bool,
     panes: &[AgentPane],
+    topic_pane: Option<&str>,
 ) -> Result<ProviderOutcome> {
     let now = CacheStore::now_unix();
     if should_skip_fetch(cache, provider, force, now)? {
@@ -220,11 +222,20 @@ fn refresh_provider(
         .filter(|pane| pane.provider == provider)
         .filter_map(|pane| pane.session_id.clone())
         .collect::<Vec<_>>();
+    // For Hermes, the backend (Codex windows vs OpenRouter credits) follows the
+    // primary pane's session, not the union of all sessions.
+    let primary_session = topic_pane.and_then(|pane_id| {
+        panes
+            .iter()
+            .find(|pane| pane.pane_id == pane_id && pane.provider == provider)
+            .and_then(|pane| pane.session_id.clone())
+    });
     let fetched = match provider {
         Provider::Codex => codex::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Grok => grok::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
         Provider::Claude | Provider::Agy => load_statusline_snapshot(cache, provider),
-        Provider::Hermes => hermes::fetch_for_sessions(&session_ids).map(FetchedSnapshot::direct),
+        Provider::Hermes => hermes::fetch_for_sessions(&session_ids, primary_session.as_deref())
+            .map(FetchedSnapshot::direct),
     };
     cache.mark_refresh(provider, now)?;
     match fetched {

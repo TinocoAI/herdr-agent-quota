@@ -21,23 +21,34 @@ const OPENROUTER_CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
 /// - Any other model (OpenRouter routes such as `tencent/hy3`) is reported as
 ///   a continuous OpenRouter credit pool.
 ///
+/// The backend (Codex windows vs OpenRouter credits) is decided by
+/// `primary_session` — the session of the pane that triggered the refresh
+/// (the focused/event pane). This keeps one pane's `/model` switch from
+/// flipping every other Hermes pane: only the pane that actually ran a Codex
+/// model reports Codex quota. When no primary session is known (e.g. the
+/// periodic watch), the first known session decides.
+///
 /// Each session's resolved model is stored under its session id so every
 /// Hermes pane shows the model it is actually running, not a shared guess.
-pub fn fetch_for_sessions(session_ids: &[String]) -> Result<ProviderSnapshot> {
+pub fn fetch_for_sessions(
+    session_ids: &[String],
+    primary_session: Option<&str>,
+) -> Result<ProviderSnapshot> {
     let fetched_at_unix = CacheStore::now_unix();
     let session_models = read_session_models(session_ids);
 
-    // Backend decision: if any active session proxies Codex, report Codex
-    // windows for the whole provider (Hermes runs one active model family at a
-    // time, and the Codex subscription has no OpenRouter credit balance).
-    let any_codex = session_models.iter().any(|(_, _, is_codex)| *is_codex);
-    let (global_model, is_codex) = if let Some((_, model, is_codex)) = session_models.first() {
+    // Decide the backend from the primary (event/focus) session, never from
+    // "any" session — otherwise a historical or sibling Codex session would
+    // flip the whole provider to Codex quota.
+    let primary = primary_session
+        .and_then(|sid| session_models.iter().find(|(id, _, _)| id == sid))
+        .or_else(|| session_models.first());
+    let (global_model, is_codex) = if let Some((_, model, is_codex)) = primary {
         (model.clone(), *is_codex)
     } else {
         let fallback = current_hermes_model();
         (fallback.clone(), is_codex_model(&fallback))
     };
-    let is_codex = any_codex || is_codex;
 
     let mut snapshot = if is_codex {
         let mut snap = codex::fetch_for_sessions(&[])
@@ -247,10 +258,12 @@ fn http_error_status(error: &ureq::Error) -> String {
 }
 
 /// Backwards-compatible single-snapshot entry point used by callers that do
-/// not have session ids (e.g. manual `refresh --provider hermes`).
+/// not have session ids (e.g. manual `refresh --provider hermes`). Uses no
+/// primary session, so the backend falls back to the first known session or
+/// the config default.
 pub fn fetch() -> Result<ProviderSnapshot> {
     let session_ids: Vec<String> = Vec::new();
-    fetch_for_sessions(&session_ids)
+    fetch_for_sessions(&session_ids, None)
 }
 
 #[cfg(test)]
@@ -310,7 +323,7 @@ mod tests {
             eprintln!("no Codex session found, skipping");
             return;
         };
-        let snapshot = fetch_for_sessions(&[sid.clone()]).expect("fetch must succeed");
+        let snapshot = fetch_for_sessions(&[sid.clone()], None).expect("fetch must succeed");
         assert!(
             snapshot
                 .model
