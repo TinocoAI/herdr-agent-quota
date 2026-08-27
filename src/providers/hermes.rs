@@ -136,17 +136,22 @@ fn read_session_models(session_ids: &[String]) -> Vec<(String, String, bool)> {
 
     let mut out = Vec::new();
     for session_id in session_ids {
-        let Ok(model): Result<String, _> = conn.query_row(
-            "SELECT model FROM sessions WHERE id = ?1",
+        let Ok((model, billing)): Result<(String, Option<String>), _> = conn.query_row(
+            "SELECT model, billing_provider FROM sessions WHERE id = ?1",
             [session_id.as_str()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         ) else {
             continue;
         };
         if model.is_empty() {
             continue;
         }
-        let is_codex = is_codex_model(&model);
+        // A session is Codex when Hermes routes it through the OpenAI Codex
+        // subscription (billing_provider = openai-codex). That is the
+        // authoritative signal — the model id alone is not enough, because
+        // Codex models such as gpt-5.6-terra / gpt-5.6-sol / gpt-5.4-mini do
+        // not match a simple name pattern.
+        let is_codex = billing.as_deref() == Some("openai-codex") || is_codex_model(&model);
         out.push((session_id.clone(), model, is_codex));
     }
     out
@@ -328,12 +333,12 @@ mod tests {
         let db = hermes.join("state.db");
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT)",
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT, billing_provider TEXT)",
             [],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO sessions (id, model) VALUES ('s1', 'gpt-5.6-luna')",
+            "INSERT INTO sessions (id, model, billing_provider) VALUES ('s1', 'gpt-5.6-terra', 'openai-codex')",
             [],
         )
         .unwrap();
@@ -345,7 +350,7 @@ mod tests {
         } else {
             unsafe { std::env::remove_var("HOME") };
         }
-        assert_eq!(model.as_deref(), Some("gpt-5.6-luna"));
+        assert_eq!(model.as_deref(), Some("gpt-5.6-terra"));
     }
 
     /// Live check against the real `~/.hermes/state.db`: a Codex session must
@@ -364,7 +369,7 @@ mod tests {
             return;
         };
         let Ok(sid): Result<String, _> = conn.query_row(
-            "SELECT id FROM sessions WHERE model = 'gpt-5.6-luna' OR model LIKE 'codex/%' LIMIT 1",
+            "SELECT id FROM sessions WHERE billing_provider = 'openai-codex' LIMIT 1",
             [],
             |row| row.get(0),
         ) else {
