@@ -1,0 +1,3 @@
+name: hermes-proctitle
+version: "1.0"
+description: Set process title to 'hermes' so Herdr detects Hermes panes (agents panel + quota)
