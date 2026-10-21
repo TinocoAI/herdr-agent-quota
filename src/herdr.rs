@@ -58,10 +58,10 @@ pub fn list_agent_panes() -> Result<Vec<AgentPane>> {
     Ok(list_agent_state()?.panes)
 }
 
-/// Read Herdr's agent inventory once and derive both panes and working
-/// providers from that same response. The active-turn watcher uses this
-/// combined view so one poll does not fan out into one `agent list` call per
-/// provider.
+/// Read Herdr's pane inventory once and derive both panes and working
+/// providers from that same response. `agent list` only returns named live
+/// agents on current Herdr versions; detected sessions and their quota tokens
+/// are in `pane list`. The watcher shares this single inventory call.
 pub fn list_agent_state() -> Result<AgentState> {
     let value = list_agent_value()?;
     let mut panes = Vec::new();
@@ -86,13 +86,13 @@ pub fn provider_has_working_agent(provider: Provider) -> Result<bool> {
 fn list_agent_value() -> Result<Value> {
     let executable = std::env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let output = Command::new(&executable)
-        .args(["agent", "list"])
+        .args(["pane", "list"])
         .output()
-        .context("list Herdr agents")?;
+        .context("list Herdr panes")?;
     if !output.status.success() {
-        anyhow::bail!("Herdr agent list failed with {}", output.status);
+        anyhow::bail!("Herdr pane list failed with {}", output.status);
     }
-    serde_json::from_slice(&output.stdout).context("parse Herdr agent list")
+    serde_json::from_slice(&output.stdout).context("parse Herdr pane list")
 }
 
 pub fn current_agent_provider() -> Result<Option<Provider>> {
@@ -114,6 +114,11 @@ pub fn current_agent_provider() -> Result<Option<Provider>> {
     Ok(value
         .pointer("/result/pane/agent")
         .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .pointer("/result/pane/agent_session/agent")
+                .and_then(Value::as_str)
+        })
         .and_then(|agent| agent.parse::<Provider>().ok()))
 }
 
@@ -638,6 +643,21 @@ mod tests {
         collect_agent_panes(&value, &mut panes);
         assert_eq!(panes[0].session_id.as_deref(), Some("thread-1"));
         assert_eq!(panes[0].session_summary, "previous summary");
+    }
+
+    #[test]
+    fn discovers_unnamed_agents_from_current_pane_list_shape() {
+        let value = json!({"result": {"panes": [
+            {"pane_id": "w1:p1", "agent_status": "working",
+             "agent_session": {"agent": "hermes", "value": "session-1"}},
+            {"pane_id": "w1:p2", "agent_status": "unknown"}
+        ]}});
+        let mut panes = Vec::new();
+        collect_agent_panes(&value, &mut panes);
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].provider, Provider::Hermes);
+        assert_eq!(panes[0].session_id.as_deref(), Some("session-1"));
+        assert_eq!(working_providers_from(&value), vec![Provider::Hermes]);
     }
 
     #[test]

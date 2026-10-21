@@ -23,6 +23,8 @@ thiserror = "2.0"
 time = { version = "0.3", features = ["parsing"] }
 toml_edit = "0.22"
 ureq = { version = "2.12", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2.2"
 # Read the active Hermes model per session from the Hermes state database.
 rusqlite = { version = "0.32", features = ["bundled"] }
 

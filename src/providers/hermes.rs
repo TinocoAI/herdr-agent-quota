@@ -1,12 +1,97 @@
 use crate::cache::CacheStore;
-use crate::model::{CreditUsage, Provider, ProviderSnapshot};
+use crate::model::{CreditUsage, Provider, ProviderSnapshot, ResetAt, UsageWindow, WindowKind};
 use crate::providers::codex;
 use crate::providers::ProviderError;
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 const OPENROUTER_CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
+const ANTHROPIC_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+
+fn http_agent() -> Result<ureq::Agent> {
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(10))
+        .timeout_write(Duration::from_secs(10));
+
+    let bundle = std::env::var_os("SSL_CERT_FILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let path =
+                PathBuf::from(std::env::var_os("HOME")?).join(".hermes/ssl/custom_bundle.pem");
+            path.exists().then_some(path)
+        });
+    if let Some(path) = bundle {
+        let file =
+            File::open(&path).with_context(|| format!("open TLS CA bundle {}", path.display()))?;
+        let mut reader = BufReader::new(file);
+        let certs = rustls_pemfile::certs(&mut reader)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("parse TLS CA bundle {}", path.display()))?;
+        let mut roots = rustls::RootCertStore::empty();
+        let (added, _) = roots.add_parsable_certificates(certs);
+        if added == 0 {
+            anyhow::bail!(
+                "TLS CA bundle contains no usable certificates: {}",
+                path.display()
+            );
+        }
+        let tls = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        builder = builder.tls_config(Arc::new(tls));
+    }
+    Ok(builder.build())
+}
+
+/// Which backend a Hermes session's active model resolves to. Hermes is a
+/// proxy, so the same "Hermes" pane can report Codex 5h/7d windows, native
+/// Anthropic 5h/7d windows, or a continuous OpenRouter credit pool depending
+/// on what the session actually routes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Codex,
+    Anthropic,
+    OpenRouter,
+}
+
+impl Backend {
+    fn from_billing(billing: Option<&str>, model: &str) -> Self {
+        match billing {
+            Some("openai-codex") => Backend::Codex,
+            // A model switch can update `model` before `billing_provider` is
+            // persisted for the next turn. Never query Anthropic with a GPT
+            // model just because this session used Claude previously.
+            Some("anthropic") if model.to_ascii_lowercase().starts_with("gpt-") => Backend::Codex,
+            Some("anthropic") => Backend::Anthropic,
+            Some(_) => Backend::OpenRouter,
+            None => {
+                if is_codex_model(model) {
+                    Backend::Codex
+                } else if is_anthropic_model(model) {
+                    Backend::Anthropic
+                } else {
+                    Backend::OpenRouter
+                }
+            }
+        }
+    }
+
+    /// Prefix stamped on the model id so the sidebar can tell which backend
+    /// produced it (mirrors the pre-existing `Codex/` convention).
+    fn model_prefix(self) -> Option<&'static str> {
+        match self {
+            Backend::Codex => Some("Codex"),
+            Backend::Anthropic => Some("Claude"),
+            Backend::OpenRouter => None,
+        }
+    }
+}
 
 /// Fetch one quota snapshot per Hermes session.
 ///
@@ -40,7 +125,7 @@ pub fn fetch_for_sessions(
     // When a primary (event/focus) session is known, resolve it first so a
     // /model switch there is reflected immediately. Sessions absent from the
     // state db (e.g. not yet persisted) fall back to the config default.
-    let order: Vec<(String, String, bool)> = if let Some(primary) = primary_session {
+    let order: Vec<(String, String, Backend)> = if let Some(primary) = primary_session {
         let mut ordered = session_models
             .iter()
             .filter(|(id, _, _)| id == primary)
@@ -52,38 +137,51 @@ pub fn fetch_for_sessions(
             }
         }
         if ordered.is_empty() {
+            let model = current_hermes_model();
             ordered.push((
                 primary.to_string(),
-                current_hermes_model(),
-                is_codex_model(&current_hermes_model()),
+                model.clone(),
+                Backend::from_billing(None, &model),
             ));
         }
         ordered
     } else if session_models.is_empty() {
+        let model = current_hermes_model();
         vec![(
             String::new(),
-            current_hermes_model(),
-            is_codex_model(&current_hermes_model()),
+            model.clone(),
+            Backend::from_billing(None, &model),
         )]
     } else {
         session_models.clone()
     };
 
     let mut out = Vec::new();
-    for (session_id, model, is_codex) in order {
-        if session_id.is_empty() {
-            // No session context: produce a single representative snapshot.
-            let snapshot = build_snapshot(is_codex, &model, &[], fetched_at_unix)?;
-            out.push((String::new(), snapshot));
-            continue;
+    let mut first_error = None;
+    for (session_id, model, backend) in order {
+        let session_label = if session_id.is_empty() {
+            vec![]
+        } else {
+            vec![(session_id.clone(), model.clone())]
+        };
+        match build_snapshot(backend, &model, &session_label, fetched_at_unix) {
+            Ok(snapshot) => out.push((session_id, snapshot)),
+            Err(error) => {
+                // Hermes sessions can use different backends. A TLS/provider
+                // failure in one old pane must not discard successful quota
+                // fetches for every other pane (for example, a Codex session
+                // after switching away from Claude). The failed pane keeps its
+                // previous cached snapshot while successful panes are updated.
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
         }
-        let snapshot = build_snapshot(
-            is_codex,
-            &model,
-            &[(session_id.clone(), model.clone())],
-            fetched_at_unix,
-        )?;
-        out.push((session_id, snapshot));
+    }
+    if out.is_empty() {
+        if let Some(error) = first_error {
+            return Err(error);
+        }
     }
     Ok(out)
 }
@@ -92,29 +190,45 @@ pub fn fetch_for_sessions(
 /// `(session_id, model)` pairs so the snapshot's token renderer can show the
 /// exact model the pane is running.
 fn build_snapshot(
-    is_codex: bool,
+    backend: Backend,
     model: &str,
     session_label: &[(String, String)],
     fetched_at_unix: u64,
 ) -> Result<ProviderSnapshot> {
-    let mut snapshot = if is_codex {
-        let mut snap = codex::fetch_for_sessions(&[])
-            .map_err(|error| anyhow::anyhow!("codex fetch failed: {error}"))?;
-        snap.provider = Provider::Hermes;
-        // The Hermes provider has no account gate (a shared quota), so drop the
-        // Codex account id copied over by the proxy — otherwise the snapshot
-        // would look like it belongs to a different account and be treated as
-        // unavailable.
-        snap.account_id = None;
-        snap
-    } else {
-        match openrouter_key() {
+    let mut snapshot = match backend {
+        Backend::Codex => {
+            let mut snap = codex::fetch_for_sessions(&[])
+                .map_err(|error| anyhow::anyhow!("codex fetch failed: {error}"))?;
+            snap.provider = Provider::Hermes;
+            // The Hermes provider has no account gate (a shared quota), so drop
+            // the Codex account id copied over by the proxy — otherwise the
+            // snapshot would look like it belongs to a different account and be
+            // treated as unavailable.
+            snap.account_id = None;
+            snap
+        }
+        Backend::Anthropic => match anthropic_token() {
+            Some(token) if !token.is_empty() => {
+                let agent = http_agent()?;
+                let response = agent
+                    .get(ANTHROPIC_USAGE_URL)
+                    .set("Authorization", &format!("Bearer {token}"))
+                    .set("Accept", "application/json")
+                    .set("anthropic-beta", "oauth-2025-04-20")
+                    .call()
+                    .map_err(|error| ProviderError::Request(http_error_status(&error)))?;
+                let value: Value = response
+                    .into_json()
+                    .context("decode Anthropic usage response")?;
+                let mut snap = parse_anthropic_usage(&value, fetched_at_unix)?;
+                snap.provider = Provider::Hermes;
+                snap
+            }
+            _ => ProviderSnapshot::new(Provider::Hermes, vec![], fetched_at_unix),
+        },
+        Backend::OpenRouter => match openrouter_key() {
             Some(key) if !key.is_empty() => {
-                let agent = ureq::AgentBuilder::new()
-                    .timeout_connect(std::time::Duration::from_secs(5))
-                    .timeout_read(std::time::Duration::from_secs(10))
-                    .timeout_write(std::time::Duration::from_secs(10))
-                    .build();
+                let agent = http_agent()?;
                 let response = agent
                     .get(OPENROUTER_CREDITS_URL)
                     .set("Authorization", &format!("Bearer {key}"))
@@ -127,45 +241,51 @@ fn build_snapshot(
                 parse_credits_response(&value, fetched_at_unix)?
             }
             _ => ProviderSnapshot::new(Provider::Hermes, vec![], fetched_at_unix),
-        }
+        },
     };
 
-    // Stamp the resolved model(s) so the sidebar shows exactly what the pane runs.
-    if is_codex {
-        if session_label.is_empty() {
-            if !model.is_empty() {
-                snapshot.model = Some(format!("Codex/{model}"));
-            }
-        } else {
-            for (session_id, model) in session_label {
-                snapshot
-                    .session_models
-                    .insert(session_id.clone(), format!("Codex/{model}"));
-            }
-            snapshot.model = Some(format!("Codex/{}", session_label[0].1));
-        }
-    } else {
-        if session_label.is_empty() {
-            if !model.is_empty() {
-                snapshot.model = Some(model.to_string());
-            }
-        } else {
-            for (session_id, model) in session_label {
-                snapshot
-                    .session_models
-                    .insert(session_id.clone(), model.clone());
-            }
-            snapshot.model = Some(session_label[0].1.clone());
-        }
-    }
-
+    stamp_session_model(&mut snapshot, backend, model, session_label);
     Ok(snapshot)
 }
 
-/// Read `(session_id, model, is_codex)` for each known Hermes session from the
+fn stamp_session_model(
+    snapshot: &mut ProviderSnapshot,
+    backend: Backend,
+    model: &str,
+    session_label: &[(String, String)],
+) {
+    // Stamp the resolved model(s) so the sidebar shows exactly what the pane runs.
+    if let Some(prefix) = backend.model_prefix() {
+        if session_label.is_empty() {
+            if !model.is_empty() {
+                snapshot.model = Some(format!("{prefix}/{model}"));
+            }
+        } else {
+            for (session_id, model) in session_label {
+                snapshot
+                    .session_models
+                    .insert(session_id.clone(), format!("{prefix}/{model}"));
+            }
+            snapshot.model = Some(format!("{prefix}/{}", session_label[0].1));
+        }
+    } else if session_label.is_empty() {
+        if !model.is_empty() {
+            snapshot.model = Some(model.to_string());
+        }
+    } else {
+        for (session_id, model) in session_label {
+            snapshot
+                .session_models
+                .insert(session_id.clone(), model.clone());
+        }
+        snapshot.model = Some(session_label[0].1.clone());
+    }
+}
+
+/// Read `(session_id, model, backend)` for each known Hermes session from the
 /// live Hermes state database. Failures (missing db, lock, parse) are silently
 /// ignored so the caller can fall back to the config default.
-fn read_session_models(session_ids: &[String]) -> Vec<(String, String, bool)> {
+fn read_session_models(session_ids: &[String]) -> Vec<(String, String, Backend)> {
     let Some(home) = std::env::var_os("HOME") else {
         return vec![];
     };
@@ -179,7 +299,7 @@ fn read_session_models(session_ids: &[String]) -> Vec<(String, String, bool)> {
     ) else {
         return vec![];
     };
-    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+    let _ = conn.busy_timeout(Duration::from_millis(500));
 
     let mut out = Vec::new();
     for session_id in session_ids {
@@ -193,13 +313,12 @@ fn read_session_models(session_ids: &[String]) -> Vec<(String, String, bool)> {
         if model.is_empty() {
             continue;
         }
-        // A session is Codex when Hermes routes it through the OpenAI Codex
-        // subscription (billing_provider = openai-codex). That is the
-        // authoritative signal — the model id alone is not enough, because
-        // Codex models such as gpt-5.6-terra / gpt-5.6-sol / gpt-5.4-mini do
-        // not match a simple name pattern.
-        let is_codex = billing.as_deref() == Some("openai-codex") || is_codex_model(&model);
-        out.push((session_id.clone(), model, is_codex));
+        // The `billing_provider` column is the authoritative signal for which
+        // backend a session actually routes through — model ids alone are not
+        // enough (Codex ids like gpt-5.6-terra don't match a simple pattern,
+        // and an Anthropic session may run any claude-* alias).
+        let backend = Backend::from_billing(billing.as_deref(), &model);
+        out.push((session_id.clone(), model, backend));
     }
     out
 }
@@ -224,6 +343,91 @@ fn parse_credits_response(
     let mut snapshot = ProviderSnapshot::new(Provider::Hermes, vec![], fetched_at_unix);
     snapshot.credits = Some(credits);
     Ok(snapshot)
+}
+
+/// Parse the native Anthropic OAuth usage endpoint response
+/// (`GET /api/oauth/usage`) into 5h/7d windows, mirroring what the Hermes
+/// backend (`agent/account_usage.py::_fetch_anthropic_account_usage`) already
+/// does for `/limits`.
+fn parse_anthropic_usage(
+    value: &Value,
+    fetched_at_unix: u64,
+) -> std::result::Result<ProviderSnapshot, ProviderError> {
+    let mut windows = Vec::new();
+    for (key, kind) in [
+        ("five_hour", WindowKind::FiveHour),
+        ("seven_day", WindowKind::Weekly),
+    ] {
+        let Some(window) = value.get(key) else {
+            continue;
+        };
+        let Some(utilization) = window.get("utilization").and_then(Value::as_f64) else {
+            continue;
+        };
+        let used_percent = if utilization <= 1.0 {
+            utilization * 100.0
+        } else {
+            utilization
+        };
+        let reset = window.get("resets_at").and_then(|value| {
+            value
+                .as_u64()
+                .map(ResetAt::from_unix_seconds)
+                .or_else(|| value.as_str().and_then(ResetAt::parse))
+        });
+        let window = UsageWindow::new(kind, used_percent.clamp(0.0, 100.0), reset)
+            .map_err(|error| ProviderError::UnsupportedResponse(error.to_string()))?;
+        windows.push(window);
+    }
+    Ok(ProviderSnapshot::new(
+        Provider::Hermes,
+        windows,
+        fetched_at_unix,
+    ))
+}
+
+/// True for model ids that identify a native Anthropic/Claude backend when no
+/// `billing_provider` column is available (e.g. config-default fallback).
+fn is_anthropic_model(model: &str) -> bool {
+    let label = model.to_ascii_lowercase();
+    label.starts_with("claude") || label.contains("claude") || label.contains("anthropic")
+}
+
+/// Resolve an Anthropic OAuth/API token the same way Hermes does
+/// (`agent/anthropic_credentials.py::resolve_anthropic_token`), minus the
+/// Claude Code credential file (that refresh flow is out of scope for a
+/// read-only sidebar fetch): env vars first, then the Hermes credential pool
+/// in `~/.hermes/auth.json`.
+fn anthropic_token() -> Option<String> {
+    for var in [
+        "ANTHROPIC_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ] {
+        if let Ok(value) = std::env::var(var) {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    let home = std::env::var_os("HOME")?;
+    let auth_path = PathBuf::from(home).join(".hermes/auth.json");
+    let contents = std::fs::read_to_string(auth_path).ok()?;
+    let value: Value = serde_json::from_str(&contents).ok()?;
+    let entries = value.get("credential_pool")?.get("anthropic")?.as_array()?;
+    for entry in entries {
+        if entry.get("auth_type").and_then(Value::as_str) != Some("oauth") {
+            continue;
+        }
+        if let Some(token) = entry.get("access_token").and_then(Value::as_str) {
+            let token = token.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Resolve the active Hermes model from `config.yaml` when no live session is
@@ -375,6 +579,77 @@ mod tests {
         assert!(is_codex_model("some-codex-thing"));
         assert!(!is_codex_model("tencent/hy3"));
         assert!(!is_codex_model("openrouter/anthropic/claude"));
+    }
+
+    #[test]
+    fn detects_anthropic_models() {
+        assert!(is_anthropic_model("claude-sonnet-4-6"));
+        assert!(is_anthropic_model("claude-opus-4"));
+        assert!(is_anthropic_model("anthropic/claude-3-5"));
+        assert!(!is_anthropic_model("gpt-5.6-luna"));
+        assert!(!is_anthropic_model("tencent/hy3"));
+    }
+
+    #[test]
+    fn backend_from_billing_prefers_the_billing_provider_column() {
+        assert_eq!(
+            Backend::from_billing(Some("anthropic"), "some-alias"),
+            Backend::Anthropic
+        );
+        assert_eq!(
+            Backend::from_billing(Some("openai-codex"), "some-alias"),
+            Backend::Codex
+        );
+        assert_eq!(
+            Backend::from_billing(Some("anthropic"), "gpt-6-sol"),
+            Backend::Codex,
+            "a just-switched GPT model must not inherit the previous Anthropic billing route"
+        );
+        assert_eq!(
+            Backend::from_billing(Some("openrouter"), "claude-looks-like-anthropic"),
+            Backend::OpenRouter
+        );
+    }
+
+    #[test]
+    fn backend_from_billing_falls_back_to_model_id_when_billing_is_unknown() {
+        assert_eq!(
+            Backend::from_billing(None, "claude-sonnet-4-6"),
+            Backend::Anthropic
+        );
+        assert_eq!(Backend::from_billing(None, "gpt-5.6-luna"), Backend::Codex);
+        assert_eq!(
+            Backend::from_billing(None, "tencent/hy3"),
+            Backend::OpenRouter
+        );
+    }
+
+    #[test]
+    fn parses_anthropic_oauth_usage_response() {
+        let value = json!({
+            "five_hour": {"utilization": 0.05, "resets_at": 1_786_795_200},
+            "seven_day": {"utilization": 1.0, "resets_at": 1_787_400_000}
+        });
+        let snapshot = parse_anthropic_usage(&value, 1).unwrap();
+        let five_hour = snapshot.window(WindowKind::FiveHour).unwrap();
+        assert!((five_hour.used_percent - 5.0).abs() < 1e-9);
+        let weekly = snapshot.window(WindowKind::Weekly).unwrap();
+        assert!((weekly.used_percent - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stamps_the_claude_prefix_for_an_anthropic_backend_session() {
+        let mut snapshot = ProviderSnapshot::new(Provider::Hermes, vec![], 1);
+        stamp_session_model(
+            &mut snapshot,
+            Backend::Anthropic,
+            "claude-sonnet-4-6",
+            &[("s1".to_string(), "claude-sonnet-4-6".to_string())],
+        );
+        assert_eq!(
+            snapshot.session_models.get("s1").map(String::as_str),
+            Some("Claude/claude-sonnet-4-6")
+        );
     }
 
     #[test]

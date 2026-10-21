@@ -77,30 +77,39 @@ impl MetadataTokens {
     ) -> Self {
         let quota_provider = snapshot.provider.display_name().to_string();
         let credits = snapshot.credits.as_ref();
-        // Hermes is a meta-provider: it proxies either OpenRouter (credit) or a
-        // Codex subscription (usage windows). Surface the *backend* name in the
-        // identity row instead of the literal model id, and put the bare model
-        // id in a dedicated row so each backend reads cleanly:
+        // Hermes is a meta-provider: it proxies OpenRouter (credit pool), a
+        // Codex subscription, or a native Anthropic/Claude subscription (both
+        // usage windows). Surface the *backend* name in the identity row
+        // instead of the literal model id, and put the bare model id in a
+        // dedicated row so each backend reads cleanly:
         //
         //   Hermes/OpenRouter  ->  `Hermes/openrouter`  + row  `poolside/...`
         //   Hermes/Codex proxy ->  `Hermes/Codex`       + row  `gpt-5.6-luna`
+        //   Hermes/Claude proxy -> `Hermes/Claude`      + row  `claude-sonnet-5`
         //   native Codex       ->  `Codex/<model>`      (model already row1)
-        let mut quota_model: String;
-        let mut quota_provider_model: String;
-        let is_codex_proxy = matches!(snapshot.provider, Provider::Hermes)
-            && credits.is_none()
-            && snapshot.window(WindowKind::FiveHour).is_some();
+        let quota_model: String;
+        let quota_provider_model: String;
+        // The proxy stamps a `Codex/` or `Claude/` prefix on the model when it
+        // resolved a windowed backend (see providers::hermes::Backend); a bare,
+        // unprefixed model with windows present would be an unexpected shape,
+        // but falls back to the OpenRouter label rather than panicking.
+        let proxy_backend_prefix = model.and_then(|m| {
+            ["Codex", "Claude"]
+                .into_iter()
+                .find(|prefix| m.starts_with(&format!("{prefix}/")))
+        });
         if matches!(snapshot.provider, Provider::Hermes) {
-            let backend = if is_codex_proxy {
-                "Codex"
-            } else {
-                "openrouter"
-            };
+            let backend = proxy_backend_prefix.unwrap_or("openrouter");
             quota_provider_model = format!("{quota_provider}/{backend}");
-            // Strip the `Codex/` prefix the proxy stamps on the model so the
-            // model row carries the bare id (e.g. `gpt-5.6-luna`).
+            // Strip the backend prefix the proxy stamps on the model so the
+            // model row carries the bare id (e.g. `gpt-5.6-luna`,
+            // `claude-sonnet-5`).
             let bare_model = model
-                .and_then(|m| m.strip_prefix("Codex/").or(Some(m)))
+                .and_then(|m| {
+                    proxy_backend_prefix
+                        .and_then(|prefix| m.strip_prefix(&format!("{prefix}/")))
+                        .or(Some(m))
+                })
                 .filter(|m| !m.is_empty())
                 .map(str::to_string)
                 .unwrap_or_default();
@@ -440,6 +449,41 @@ mod tests {
             MetadataTokens::from_snapshot_for_session(&snapshot, 0, Some("session-2"));
         assert_eq!(session_two.quota_model, "");
         assert_eq!(session_two.quota_provider_model, "Claude");
+    }
+
+    #[test]
+    fn metadata_labels_the_hermes_codex_proxy_and_strips_the_prefix() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Hermes,
+            vec![window(WindowKind::FiveHour, 10.0, 14_820)],
+            0,
+        )
+        .with_model(Some("Codex/gpt-5.6-luna".to_string()));
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_provider_model, "Hermes/Codex");
+        assert_eq!(values.quota_model, "gpt-5.6-luna");
+    }
+
+    #[test]
+    fn metadata_labels_the_hermes_claude_proxy_and_strips_the_prefix() {
+        let snapshot = ProviderSnapshot::new(
+            Provider::Hermes,
+            vec![window(WindowKind::FiveHour, 5.0, 14_820)],
+            0,
+        )
+        .with_model(Some("Claude/claude-sonnet-5".to_string()));
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_provider_model, "Hermes/Claude");
+        assert_eq!(values.quota_model, "claude-sonnet-5");
+    }
+
+    #[test]
+    fn metadata_labels_the_hermes_openrouter_proxy_when_no_backend_prefix() {
+        let snapshot = ProviderSnapshot::new(Provider::Hermes, vec![], 0)
+            .with_model(Some("tencent/hy3".to_string()));
+        let values = MetadataTokens::from_snapshot(&snapshot, 0);
+        assert_eq!(values.quota_provider_model, "Hermes/openrouter");
+        assert_eq!(values.quota_model, "tencent/hy3");
     }
 
     #[test]

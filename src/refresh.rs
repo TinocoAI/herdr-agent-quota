@@ -225,21 +225,39 @@ fn refresh_provider(
                 .find(|pane| pane.pane_id == pane_id && pane.provider == provider)
                 .and_then(|pane| pane.session_id.clone())
         });
-        let live_model = hermes::current_session_model(primary.as_deref());
-        let cached_model = primary.as_deref().and_then(|session_id| {
-            cache
-                .load_hermes_for_session(session_id)
+        // Only bypass the debounce for a /model switch when we have a known
+        // primary session. Without a topic_pane (e.g. the focus hook), primary
+        // is always None, so comparing live_model against cached_model would
+        // yield live_model=Some(config_default) vs cached_model=None — always
+        // unequal — which forces a network fetch on every pane focus and causes
+        // HTTP 429 responses from the Anthropic usage endpoint.
+        if let Some(ref primary_id) = primary {
+            let live_model = hermes::current_session_model(Some(primary_id));
+            let cached_model = cache
+                .load_hermes_for_session(primary_id)
                 .ok()
                 .flatten()
                 .and_then(|snapshot| {
                     snapshot
                         .session_models
-                        .get(session_id)
+                        .get(primary_id)
                         .cloned()
                         .or(snapshot.model.clone())
-                })
-        });
-        force || live_model != cached_model
+                });
+            // Cached Hermes models carry a backend prefix (Codex/ or
+            // Claude/) while state.db stores the bare model id. Comparing
+            // them verbatim bypasses the debounce on every agent event.
+            let cached_model = cached_model.map(|model| {
+                model
+                    .strip_prefix("Codex/")
+                    .or_else(|| model.strip_prefix("Claude/"))
+                    .unwrap_or(&model)
+                    .to_string()
+            });
+            force || live_model != cached_model
+        } else {
+            force
+        }
     } else {
         force
     };
