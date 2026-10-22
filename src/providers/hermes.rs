@@ -313,6 +313,16 @@ fn read_session_models(session_ids: &[String]) -> Vec<(String, String, Backend)>
         if model.is_empty() {
             continue;
         }
+        // `sessions.model` can name a route that never served a main turn: the
+        // gateway persists the agent's model after a FAILED turn too, so a
+        // provider fallback that errored (e.g. OpenRouter 402) leaves the
+        // fallback model in the row while the session keeps running on the
+        // primary. Prefer the route that actually billed the latest main
+        // conversation call when the recorded model has never billed one.
+        let (model, billing) = match last_billed_main_route(&conn, session_id, &model) {
+            Some(route) => route,
+            None => (model, billing),
+        };
         // The `billing_provider` column is the authoritative signal for which
         // backend a session actually routes through — model ids alone are not
         // enough (Codex ids like gpt-5.6-terra don't match a simple pattern,
@@ -321,6 +331,38 @@ fn read_session_models(session_ids: &[String]) -> Vec<(String, String, Backend)>
         out.push((session_id.clone(), model, backend));
     }
     out
+}
+
+/// `Some((model, billing_provider))` of the most recent main-conversation call
+/// (`task = ''`) when `recorded_model` has no main-conversation usage row of its
+/// own; `None` when the recorded model did serve a main call, when there is no
+/// usage yet (fresh session or a `/model` switch awaiting its first call), or
+/// when the usage table is unavailable.
+fn last_billed_main_route(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    recorded_model: &str,
+) -> Option<(String, Option<String>)> {
+    let recorded_billed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM session_model_usage \
+             WHERE session_id = ?1 AND task = '' AND model = ?2 AND api_call_count > 0",
+            [session_id, recorded_model],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if recorded_billed > 0 {
+        return None;
+    }
+    conn.query_row(
+        "SELECT model, billing_provider FROM session_model_usage \
+         WHERE session_id = ?1 AND task = '' AND api_call_count > 0 AND model <> '' \
+         ORDER BY last_seen DESC LIMIT 1",
+        [session_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .ok()
+    .map(|(model, billing)| (model, billing.filter(|b| !b.is_empty())))
 }
 
 fn parse_credits_response(
@@ -650,6 +692,29 @@ mod tests {
             snapshot.session_models.get("s1").map(String::as_str),
             Some("Claude/claude-sonnet-4-6")
         );
+    }
+
+    #[test]
+    fn failed_fallback_model_is_replaced_by_last_billed_route() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_model_usage (session_id TEXT, model TEXT, \
+             billing_provider TEXT, task TEXT, api_call_count INTEGER, last_seen REAL);
+             INSERT INTO session_model_usage VALUES
+               ('s1','deepseek/flash','openrouter','title_generation',1,10),
+               ('s1','gpt-6.1-sol','openai-codex','',344,20),
+               ('s2','claude-opus-5-5','anthropic','',3,5);",
+        )
+        .unwrap();
+        // s1: row says the failed fallback model, which never billed a main call.
+        assert_eq!(
+            last_billed_main_route(&conn, "s1", "google/gemini-3.7-flash"),
+            Some(("gpt-6.1-sol".to_string(), Some("openai-codex".to_string())))
+        );
+        // Recorded model did bill a main call: keep it.
+        assert_eq!(last_billed_main_route(&conn, "s2", "claude-opus-5-5"), None);
+        // No usage at all (fresh session / pending /model switch): keep the row.
+        assert_eq!(last_billed_main_route(&conn, "s3", "gpt-6.1-sol"), None);
     }
 
     #[test]
