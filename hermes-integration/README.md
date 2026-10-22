@@ -67,3 +67,23 @@ otherwise silent.
 Note: `herdr integration install hermes` replaces
 `~/.hermes/plugins/herdr-agent-state/__init__.py` with the upstream version.
 Re-copy `herdr_agent_state.py` afterwards.
+
+## Working/idle detection (Herdr manifest override)
+
+Herdr's remote `hermes` detection manifest (2026.07.24.1) recognises "working"
+only from the Ink TUI's tab title (`⏳`) or from footer texts that the classic
+CLI no longer prints. The Hermes 0.22 classic CLI sets no OSC title, and while a
+turn runs its footer reads "enter interrupt · tab queue · ctrl+c stop". As a
+result, panes were always shown as `idle`.
+
+`herdr-agent-detection/hermes.toml` is the remote manifest plus one rule for
+that footer. Install it as a local override (local overrides always win):
+
+```bash
+mkdir -p ~/.config/herdr/agent-detection
+cp herdr-agent-detection/hermes.toml ~/.config/herdr/agent-detection/hermes.toml
+herdr server reload-agent-manifests
+herdr agent explain <pane> --json   # matched_rule: classic_cli_v022_working while busy
+```
+
+Remove the override once Herdr's remote manifest covers the classic CLI.
