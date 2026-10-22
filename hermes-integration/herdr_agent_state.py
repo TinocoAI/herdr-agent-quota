@@ -579,9 +579,51 @@ def _session_reset(**kwargs) -> None:
 def _session_observed(**kwargs) -> None:
     if kwargs.get("platform") == "cli":
         _report_session("resume", **kwargs)
+    _kick_quota_refresh(kwargs.get("session_id"), min_gap=5.0)
+
+
+# --- quota refresh kick -------------------------------------------------------
+# Herdr does not see lifecycle transitions of gateway-run Hermes sessions (the
+# pane stays `idle`), so herdr-agent-quota's pane.agent_status_changed handler
+# never fires and the rows only refreshed on pane focus. Kick the Rust plugin's
+# DEBOUNCED `refresh-hermes` action (60s floor per provider, model switches
+# still refetch) at turn start/end and, throttled, during long tool loops.
+_last_kick: dict[str, float] = {}
+
+
+def _kick_quota_refresh(session_id, min_gap: float) -> None:
+    if not isinstance(session_id, str) or not session_id or not _quota_plugin_installed():
+        return
+    now = time.monotonic()
+    if now - _last_kick.get(session_id, -1e9) < min_gap:
+        return
+    _last_kick[session_id] = now
+    token = _CURRENT_SESSION.set(session_id)
+    try:
+        if _pane_id() is None:
+            return
+        cmd = [_herdr_bin(), "plugin", "action", "invoke", "herdr-agent-quota.refresh-hermes"]
+        env = _herdr_subprocess_env()
+    finally:
+        _CURRENT_SESSION.reset(token)
+    try:
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+    except Exception as exc:
+        _log(f"refresh-hermes exc={exc!r}")
+
+
+def _turn_finished(**kwargs) -> None:
+    _kick_quota_refresh(kwargs.get("session_id"), min_gap=2.0)
+
+
+def _tool_finished(**kwargs) -> None:
+    _kick_quota_refresh(kwargs.get("session_id"), min_gap=30.0)
 
 
 def register(ctx):
     ctx.register_hook("on_session_start", _session_started)
     ctx.register_hook("on_session_reset", _session_reset)
     ctx.register_hook("pre_llm_call", _session_observed)
+    ctx.register_hook("post_llm_call", _turn_finished)
+    ctx.register_hook("post_tool_call", _tool_finished)

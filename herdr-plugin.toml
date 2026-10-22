@@ -16,6 +16,15 @@ id = "refresh"
 title = "Refresh agent quota"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider all --force"]
 
+# Debounced Hermes refresh (60s floor per provider; a model/backend switch still
+# refetches). Invoked by the Hermes integration plugin at the start and end of
+# every turn, because Herdr does not see Hermes lifecycle transitions
+# (gateway-run sessions stay `idle`), so pane.agent_status_changed never fires.
+[[actions]]
+id = "refresh-hermes"
+title = "Refresh Hermes quota (debounced)"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-agent-quota\" refresh --provider hermes"]
+
 [[actions]]
 id = "configure"
 title = "Install / repair agent quota"
