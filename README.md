@@ -48,30 +48,20 @@ For a downloaded checkout, one command applies every reversible integration
 The screenshot is a real local Herdr session. The values and topic text are
 examples from that session; they are not hard-coded in the plugin.
 
-### Time-aware quota health
+### Quota health colours
 
-Quota colors answer “will this allowance last until reset?” instead of applying
-a fixed percentage threshold. For each available 5-hour or 7-day window, the
-plugin computes:
+Colours follow the remaining quota level of each 5-hour or 7-day window (and of
+the Hermes/OpenRouter credit pool):
 
-```text
-time_left  = (reset_at - now) / window_duration
-quota_left = remaining_percent / 100
-health     = quota_left / time_left
-```
+- **Green**: 50% or more remaining.
+- **Amber**: 20% to 50% remaining.
+- **Red**: less than 20% remaining.
+- **Unknown (amber)**: reset data is missing or expired, so the plugin does not
+  claim that the quota is safe.
 
-- **Green** — `health >= 1`: quota is being consumed no faster than time.
-- **Amber** — `health < 1`: current usage is ahead of the sustainable pace.
-- **Red** — `health < 1` and less than 20% quota remains: exhaustion risk is
-  both immediate and material.
-- **Amber fallback** — reset data is missing or expired, so the plugin avoids
-  claiming that the quota is safe.
-
-This explains the screenshot: Claude's 5-hour 89% is amber because slightly
-more than 89% of that window remains; its weekly 24% is green because only about
-13% of the week remains. Grok's weekly 17% is red because about 69% of its
-window remains and the quota is already below 20%. The calculation is shared by
-every provider adapter; only the window data differs.
+An earlier version coloured by consumption pace (remaining quota compared with
+the share of window time left). That painted a freshly reset window amber after
+a few percent of usage. This fork uses fixed levels instead.
 
 ## Quick start
 
@@ -353,10 +343,8 @@ rows = [
 - Each window publishes exactly one styled variant. Herdr renders adjacent
   values on the same row with `·` separators and removes separators for missing
   values, so 5h/7d stay compact while retaining independent colors. Color
-  follows runway rather than a fixed quota threshold: remaining quota is
-  compared with the percentage of window time still left. At or ahead of pace
-  is green; behind pace is amber; behind pace with less than 20% quota remaining
-  is red. Missing or expired reset data uses the warning color.
+  follows the remaining level: green at 50% or more, amber from 20% to 50%,
+  red below 20%. Missing or expired reset data uses the warning color.
 - `row_gap = 1` adds one blank row between agent cards. An existing explicit
   `row_gap` value is preserved.
 - `$quota_5h`, `$quota_week`, and `$quota_summary` remain available for custom

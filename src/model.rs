@@ -508,20 +508,13 @@ impl ProviderSnapshot {
             .unwrap_or(Severity::Unknown)
     }
 
-    /// Severity for the Hermes credit pool. `unknown` while no credits are
-    /// known, `danger` below 20% remaining, otherwise `normal`.
+    /// Severity for the Hermes credit pool: `unknown` while no credits are
+    /// known, otherwise the same level scheme as the quota windows.
     pub fn credits_severity(&self) -> Severity {
         let Some(credits) = &self.credits else {
             return Severity::Unknown;
         };
-        if credits.remaining_percent <= 0.0 {
-            return Severity::Danger;
-        }
-        if credits.remaining_percent < 20.0 {
-            Severity::Danger
-        } else {
-            Severity::Normal
-        }
+        Severity::for_remaining_percent(credits.remaining_percent)
     }
 }
 
@@ -556,20 +549,23 @@ impl Severity {
         let Some(reset_at) = window.resets_at else {
             return Self::Unknown;
         };
-        let remaining_seconds = reset_at.unix_seconds().saturating_sub(now_unix);
-        if remaining_seconds == 0 {
+        if reset_at.unix_seconds() <= now_unix {
+            // The window already reset: the cached percentage is stale.
             return Self::Unknown;
         }
+        Self::for_remaining_percent(window.remaining_percent)
+    }
 
-        let remaining_time_percent = remaining_seconds.min(window.kind.duration_seconds()) as f64
-            / window.kind.duration_seconds() as f64
-            * 100.0;
-        if window.remaining_percent >= remaining_time_percent {
+    /// Level-only colour scheme: green at or above 50% remaining, orange from
+    /// 20% to 50%, red below 20%. Deliberately ignores consumption pace, which
+    /// painted a freshly reset window orange after a few percent of usage.
+    pub fn for_remaining_percent(remaining_percent: f64) -> Self {
+        if remaining_percent >= 50.0 {
             Self::Normal
-        } else if window.remaining_percent < 20.0 {
-            Self::Danger
-        } else {
+        } else if remaining_percent >= 20.0 {
             Self::Warning
+        } else {
+            Self::Danger
         }
     }
 }
@@ -704,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn severity_compares_quota_runway_with_time_remaining() {
+    fn severity_bands_by_remaining_quota() {
         let now = 1_000_000;
         let reset = ResetAt::after(now, WindowKind::Weekly.duration_seconds() / 2);
 
@@ -748,12 +744,22 @@ mod tests {
     }
 
     #[test]
-    fn low_quota_is_safe_when_reset_is_close() {
+    fn severity_follows_remaining_level_not_pace() {
         let now = 1_000_000;
-        let reset = ResetAt::after(now, WindowKind::Weekly.duration_seconds() / 10);
-        let window = UsageWindow::new(WindowKind::Weekly, 85.0, Some(reset)).unwrap();
-
+        // Just after a reset: 3% used, almost the whole window ahead -> green.
+        let fresh = ResetAt::after(now, WindowKind::Weekly.duration_seconds() - 3_600);
+        let window = UsageWindow::new(WindowKind::Weekly, 3.0, Some(fresh)).unwrap();
         assert_eq!(Severity::for_window(&window, now), Severity::Normal);
+
+        // Low quota stays red even when the reset is close.
+        let close = ResetAt::after(now, WindowKind::Weekly.duration_seconds() / 10);
+        let window = UsageWindow::new(WindowKind::Weekly, 85.0, Some(close)).unwrap();
+        assert_eq!(Severity::for_window(&window, now), Severity::Danger);
+
+        assert_eq!(Severity::for_remaining_percent(50.0), Severity::Normal);
+        assert_eq!(Severity::for_remaining_percent(49.9), Severity::Warning);
+        assert_eq!(Severity::for_remaining_percent(20.0), Severity::Warning);
+        assert_eq!(Severity::for_remaining_percent(19.9), Severity::Danger);
     }
 
     #[test]

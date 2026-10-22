@@ -299,19 +299,15 @@ def _codex_quota_tokens() -> dict[str, str]:
         # Severity is keyed on the *time* remaining vs the window length,
         # matching herdr-agent-quota's Severity::for_window.
         def severity(remaining_pct: float, resets_at: int) -> str:
-            remaining_seconds = max(resets_at - now_unix, 0)
-            if remaining_seconds <= 0:
+            # Level-only scheme, same as herdr-agent-quota: >=50 green,
+            # 20-50 amber, <20 red; expired/missing reset -> unknown.
+            if resets_at - now_unix <= 0:
                 return "unknown"
-            remaining_time_pct = (
-                min(remaining_seconds, duration_seconds(kind))
-                / duration_seconds(kind)
-                * 100.0
-            )
-            if remaining_pct >= remaining_time_pct:
+            if remaining_pct >= 50.0:
                 return "normal"
-            if remaining_pct < 20.0:
-                return "danger"
-            return "warning"
+            if remaining_pct >= 20.0:
+                return "warning"
+            return "danger"
 
         def fmt_reset(resets_at: int) -> str:
             secs = max(resets_at - now_unix, 0)
